@@ -140,6 +140,7 @@
 % % 即支持类似word里的给黑体、宋体等中文字体加粗的操作，用\bfseries
 \newfontfamily{\enheiti}{SimHei} % 解决标题英文括号不显示黑体
 \newfontfamily{\enkaiti}{KaiTi}  % 楷体标题里的数字也用楷体(否则落到 Times)
+\newfontfamily{\enkgb}{KaiTi_GB2312.ttf} % 三级标题用楷体GB2312(连其数字一起)
 
 % 预定义名称
 \newcommand*{\csu@name@cover}{扉页}
@@ -648,7 +649,9 @@
         fixskip      = true,
     },
     subsection = {%
-        format       = \zihao{-4} \kaiti\enkaiti,
+        format       = \zihao{-4} \kgb\enkgb,    % 三级标题：小四 楷体GB2312（文字+章节号）
+        indent       = {2\ccwd},                 % 缩进两个汉字
+        aftername    = {\quad},                  % 章节号后空一个汉字
         afterindent  = true,
         afterskip    = {2ex \@plus .2ex},
         fixskip      = true,
