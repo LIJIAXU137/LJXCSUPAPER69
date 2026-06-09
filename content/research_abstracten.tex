@@ -1,0 +1,13 @@
+%!TEX root = ../csuthesis_research.tex
+
+\keywordsen{Continual Learning; Medical Image Classification; Semantic Segmentation; Time Series Classification; Multimodal Large Language Models}
+
+\begin{abstracten}
+
+This research report presents a systematic study on continual learning methods based on closed-form solutions. Conventional continual learning methods usually rely on gradient-based incremental optimization, which often leads to catastrophic forgetting, while replay-based strategies introduce additional storage and privacy burdens. To address these issues, the report adopts an analytic learning perspective and reformulates incremental updates as a recursive ridge-regression closed-form problem. By maintaining sufficient statistics and recursively updating the analytic head, the framework supports knowledge retention and new-class adaptation without storing historical raw samples.
+
+The report first reviews the research landscape and key challenges of continual learning, then establishes a unified mathematical framework, including problem formulation, ridge-regression closed-form solution, recursive update equations, and the proof of equivalence to joint training. Based on this foundation, task-specific designs are provided for medical image classification, time-series classification, class-incremental semantic segmentation, and multimodal expert routing, together with framework diagrams, module specifications, and evaluation protocols. The experimental design covers multiple criteria, including accuracy, forgetting rate, mIoU, backward transfer, and incremental runtime, with systematic ablation and robustness analysis plans.
+
+In addition, the report proposes a two-month (8-week) execution plan, covering literature review, algorithm implementation, task-level experiments, result consolidation, and final report completion, with clear weekly objectives and staged deliverables. Overall, this report delivers an integrated pre-study framework spanning theory, method, experiment, and schedule, providing a solid basis for subsequent project implementation.
+
+\end{abstracten}

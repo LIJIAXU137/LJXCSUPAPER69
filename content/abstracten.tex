@@ -1,0 +1,12 @@
+%!TEX root = ../csuthesis_main.tex
+\keywordsen{Continual Learning; Medical Image Classification; Semantic Segmentation; Time Series Classification; Multimodal Large Language Models}
+
+\begin{abstracten}
+
+Continual learning needs to address the following problem: when data arrive in batches and the set of categories changes continuously, a model must adapt to new tasks while avoiding forgetting previously acquired knowledge. Most existing works rely on gradient descent for online updates, which are vulnerable to gradient conflicts and may lead to catastrophic forgetting. Although replay-based methods are feasible, they introduce substantial storage overhead and privacy concerns. This paper takes an alternative route by summarizing and systematizing continual learning methods based on analytical learning from the perspective of closed-form solutions.
+
+The study begins by organizing the closed-form solution of recursive ridge regression and generalizes it into a unified mathematical expression. In the initial stage, an encoder is trained and then kept fixed, while only the analytical classification head is recursively updated. In this way, incremental learning can be transformed into a regularized least-squares problem. Meanwhile, the paper presents and proves a recursive formula that does not require access to all previous raw samples. Based on this formulation, the proposed algorithms are implemented and experimentally evaluated across several different tasks. These include medical image disease classification, which demonstrates the application of analytical continual learning in privacy-sensitive scenarios; time-series classification, where multiscale feature fusion and random high-dimensional mapping are combined to address catastrophic forgetting and intra-class variation; class-incremental semantic segmentation, for which a continual segmentation framework integrating random high-dimensional mapping and pseudo-labeling is proposed to handle both 2D images and 3D point clouds; and multimodal language models, where an analytical low-rank expert selection head is introduced for efficient expert routing.
+
+Comprehensive experiments show that the proposed methods achieve strong performance across semantic segmentation, medical image classification, time-series classification, and expert routing in multimodal language models. At the same time, they substantially reduce the learning cost during continual learning and require no replay of previous data.
+
+\end{abstracten}

@@ -1,0 +1,327 @@
+%!TEX root = ../../csuthesis_main.tex
+\chapter{持续学习闭式解方法}
+
+为解决持续学习在按阶段吸收新任务时由反向传播主导的参数更新所引发的灾难性遗忘问题，以及随之而来的稳定性—可塑性矛盾在传统梯度框架下难以兼顾这一核心难题，本章给出统一的理论分析，并提出基于递归岭回归的闭式求解方法。其核心思路是把持续学习增量阶段的参数更新即依赖反向传播的迭代调优问题重新表述为带正则项的递归岭回归解析求解问题，并据此推出递归更新公式，使模型仅借助上一阶段的统计量与当前阶段的样本就能完成更新。本章先界定持续学习问题的统一记号；接着从单批次岭回归闭式解出发，逐步推出递归形式；继而以严格的证明表明递归更新结果与联合训练解析解完全一致；最后从复杂度、隐私性以及可推广性这三个角度分析算法性质。本章构成第四章面向四类典型任务的应用方法的统一理论支撑。
+
+\section{问题定义}
+
+设持续学习过程总共包含 $T$ 个阶段，第 $t$ 个阶段的训练数据记为
+\begin{equation}
+\mathcal{D}_t=\left\{\mathbf{X}_t,\mathbf{Y}_t\right\}, \quad t=1,2,\ldots,T,
+\end{equation}
+其中 $\mathbf{X}_t \in \mathbb{R}^{N_t \times d}$ 是第 $t$ 阶段用于解析学习的数据矩阵，$N_t$ 为该阶段的样本数目，$d$ 为特征维度；$\mathbf{Y}_t$ 则为相应的真值矩阵。出于统一全文记号，后续各章均以 $\mathbf{X}$ 表示数据、以 $\mathbf{Y}$ 表示真值。在类别增量学习问题中，第 $t$ 阶段会引入新类别集合 $S_t$，并要求不同阶段所引入的新类别互不重叠，即
+\begin{equation}
+S_i \cap S_j = \varnothing, \quad i \neq j.
+\end{equation}
+
+持续学习场景里，模型在第 $t$ 阶段结束之后必须同时识别截至当前已经见过的全部类别。把累计标签空间维度记为 $d_{C_t}$，那么所要学习的目标就是分类头参数矩阵
+\begin{equation}
+\Phi_t \in \mathbb{R}^{d \times d_{C_t}},
+\end{equation}
+要求其能借助当前阶段与历史阶段累积起来的判别信息对所有已见类别做统一预测。不同任务场景下，输入张量的形态、监督形式以及类别空间大小都会存有一些差异，但增量更新这一核心问题始终可归结为对上述参数矩阵的递推求解。这里 $\Phi_t$ 是待求解的分类头变量，在岭回归意义下的最优闭式解记为 $\widehat{\Phi}_t$。
+
+\section{岭回归闭式解}
+
+先来看单次批学习的情况。给定某一阶段的数据矩阵 $\mathbf{X}$ 与真值矩阵 $\mathbf{Y}$，解析分类头能够借助岭回归求出，对应的优化问题为：
+\begin{equation}
+\min_{\Phi} \left\|\mathbf{Y}-\mathbf{X}\Phi\right\|_F^2 + \gamma\left\|\Phi\right\|_F^2,
+\label{eq:ridge_obj}
+\end{equation}
+其中 $\gamma > 0$ 是正则化系数，$\|\cdot\|_F$ 代表 Frobenius 范数。
+
+式(\ref{eq:ridge_obj})是一个标准的带 $\ell_2$ 正则项的最小二乘问题，它的解析解为
+\begin{equation}
+\widehat{\Phi}=\left(\mathbf{X}^{\top}\mathbf{X}+\gamma \mathbf{I}\right)^{-1}\mathbf{X}^{\top}\mathbf{Y},
+\label{eq:ridge_closed_form}
+\end{equation}
+式中 $\mathbf{I}$ 表示单位矩阵。由式~\eqref{eq:ridge_closed_form}的单批岭回归形式可观察到，只要编码器特征已经固定，分类头的最优解就能够直接由矩阵运算得到，不需要多轮梯度迭代反向传播。
+
+把第 $1$ 至第 $t$ 阶段的样本全部联合起来，对应的累计数据矩阵和累计标签矩阵则分别写作
+\begin{equation}
+\mathbf{X}_{1:t}=
+\begin{bmatrix}
+\mathbf{X}_1 \\
+\mathbf{X}_2 \\
+\vdots \\
+\mathbf{X}_t
+\end{bmatrix},
+\qquad
+\mathbf{Y}_{1:t}=
+\begin{bmatrix}
+\mathbf{Y}_1 \\
+\mathbf{Y}_2 \\
+\vdots \\
+\mathbf{Y}_t
+\end{bmatrix}.
+\end{equation}
+由于类别集合会随阶段推进不断扩张，为了让矩阵维度保持一致，历史标签矩阵在拼接时需要对尚未浮现的类别位置补零。这样，第 $t$ 阶段对应的联合训练最优解就可写作
+\begin{equation}
+\widehat{\Phi}_t=\left(\mathbf{X}_{1:t}^{\top}\mathbf{X}_{1:t}+\gamma \mathbf{I}\right)^{-1}\mathbf{X}_{1:t}^{\top}\mathbf{Y}_{1:t}.
+\label{eq:joint_solution}
+\end{equation}
+
+式(\ref{eq:joint_solution})在理论上给出了一个理想的联合训练结果，但若直接按式计算就必须用到所有的历史样本，下面要做的就是把它改写成递归形式。
+
+\section{累积矩阵的分块表示}
+
+出于推导出增量更新公式，先把上一阶段的逆自相关矩阵定义为
+\begin{equation}
+\Psi_{t-1}=\left(\mathbf{X}_{1:t-1}^{\top}\mathbf{X}_{1:t-1}+\gamma \mathbf{I}\right)^{-1}.
+\label{eq:psi_def}
+\end{equation}
+矩阵 $\Psi_{t-1}$ 以压缩的形式保留了截至第 $t-1$ 阶段全部样本的二阶统计量，它是后续递归更新中的关键。旨在使递推过程在数值上始终良好定义，本文统一约定 $\gamma>0$，并把 $\Psi_0=(\gamma\mathbf{I})^{-1}$ 作为递推的起点；这一约定确保任意阶段的 $\Psi_t$ 均为正定矩阵，由此 $\mathbf{I}+\mathbf{X}_t\Psi_{t-1}\mathbf{X}_t^{\top}$ 始终可逆。
+
+另一方面，第 $t$ 阶段的当前标签矩阵能够按"旧类别部分"与"新类别部分"做拆分：
+\begin{equation}
+\mathbf{Y}_t=
+\begin{bmatrix}
+\bar{\mathbf{Y}}_t & \tilde{\mathbf{Y}}_t
+\end{bmatrix},
+\label{eq:y_split}
+\end{equation}
+其中 $\bar{\mathbf{Y}}_t \in \mathbb{R}^{N_t \times d_{C_{t-1}}}$ 对应旧类别位置，$\tilde{\mathbf{Y}}_t \in \mathbb{R}^{N_t \times (d_{C_t}-d_{C_{t-1}})}$ 对应新类别位置。对标准的类别增量分类问题而言，$\bar{\mathbf{Y}}_t$ 一般是零矩阵；而对于带伪标签的语义分割等问题，$\bar{\mathbf{Y}}_t$ 可包含旧类别信息。所以，式(\ref{eq:y_split})比仅应对纯新类别标签的形式要更为通用。
+
+依照分块结构，第 $t$ 阶段累计标签矩阵能够表达为
+\begin{equation}
+\mathbf{Y}_{1:t}=
+\begin{bmatrix}
+\mathbf{Y}_{1:t-1} & \mathbf{0} \\
+\bar{\mathbf{Y}}_t & \tilde{\mathbf{Y}}_t
+\end{bmatrix},
+\label{eq:y_concat}
+\end{equation}
+累计数据矩阵则有
+\begin{equation}
+\mathbf{X}_{1:t}=
+\begin{bmatrix}
+\mathbf{X}_{1:t-1} \\
+\mathbf{X}_t
+\end{bmatrix}.
+\label{eq:x_concat}
+\end{equation}
+
+把式(\ref{eq:y_concat})与式(\ref{eq:x_concat})同时代入式(\ref{eq:joint_solution})，就能得到第 $t$ 阶段联合训练的解析解。下一节将给出其递归表达。
+
+\section{递归更新定理与证明}
+
+为方便后续表述，先把本章的核心结论列出。
+
+\begin{theorem}[递归岭回归闭式解]\label{thm:closed_form_recursive}
+设第 $t-1$ 阶段的解析分类头为 $\widehat{\Phi}_{t-1}$，其逆自相关矩阵为 $\Psi_{t-1}$。那么第 $t$ 阶段的逆自相关矩阵可以按下式递归更新
+\begin{equation}
+\Psi_t = \left(\Psi_{t-1}^{-1}+\mathbf{X}_t^{\top}\mathbf{X}_t\right)^{-1}.
+\label{eq:psi_recursive_basic}
+\end{equation}
+进一步地，第 $t$ 阶段的分类头闭式解可以表示为
+\begin{equation}
+\widehat{\Phi}_t=
+\begin{bmatrix}
+\widehat{\Phi}_{t-1}-\Psi_t\mathbf{X}_t^{\top}\mathbf{X}_t\widehat{\Phi}_{t-1}+\Psi_t\mathbf{X}_t^{\top}\bar{\mathbf{Y}}_t
+&
+\Psi_t\mathbf{X}_t^{\top}\tilde{\mathbf{Y}}_t
+\end{bmatrix}.
+\label{eq:phi_recursive_final}
+\end{equation}
+式(\ref{eq:phi_recursive_final})与直接使用全部历史数据所得到的联合训练解完全等价。
+\end{theorem}
+
+\begin{proof}
+证明的整体思路是：第一步借助分块矩阵乘法直接给出 $\Psi_t$ 与 $\mathbf{Q}_t$ 的二项加法分解；第二步则借助 Woodbury 恒等式，把 $\Psi_t\mathbf{Q}_{t-1}$ 拆分成只依赖上一阶段统计量 $(\Psi_{t-1},\widehat{\Phi}_{t-1})$ 与当前数据 $(\mathbf{X}_t,\mathbf{Y}_t)$ 的形式。
+
+由式(\ref{eq:joint_solution})可知，第 $t-1$ 阶段的联合训练解为
+\begin{equation}
+\widehat{\Phi}_{t-1}=\left(\mathbf{X}_{1:t-1}^{\top}\mathbf{X}_{1:t-1}+\gamma\mathbf{I}\right)^{-1}\mathbf{X}_{1:t-1}^{\top}\mathbf{Y}_{1:t-1}.
+\label{eq:phi_tminus1_joint}
+\end{equation}
+
+为简化记号，再把第 $t-1$ 阶段的互相关矩阵定义为
+\begin{equation}
+\mathbf{Q}_{t-1}=\mathbf{X}_{1:t-1}^{\top}\mathbf{Y}_{1:t-1}.
+\label{eq:q_tminus1}
+\end{equation}
+由此可得
+\begin{equation}
+\widehat{\Phi}_{t-1}=\Psi_{t-1}\mathbf{Q}_{t-1}.
+\label{eq:phi_as_psi_q}
+\end{equation}
+
+同理地，第 $t$ 阶段的联合训练解可以写为
+\begin{equation}
+\widehat{\Phi}_t=\Psi_t\mathbf{Q}_t,
+\label{eq:phi_t_psi_q}
+\end{equation}
+而由式(\ref{eq:x_concat})做分块乘法展开就有
+\begin{equation}
+\mathbf{X}_{1:t}^{\top}\mathbf{X}_{1:t}=\mathbf{X}_{1:t-1}^{\top}\mathbf{X}_{1:t-1}+\mathbf{X}_t^{\top}\mathbf{X}_t,
+\label{eq:xtx_block}
+\end{equation}
+结合式~\eqref{eq:xtx_block}的分块乘法与逆自相关矩阵的定义式(\ref{eq:psi_def})可得 $\Psi_t^{-1}=\mathbf{X}_{1:t}^{\top}\mathbf{X}_{1:t}+\gamma\mathbf{I}=\mathbf{X}_{1:t-1}^{\top}\mathbf{X}_{1:t-1}+\gamma\mathbf{I}+\mathbf{X}_t^{\top}\mathbf{X}_t=\Psi_{t-1}^{-1}+\mathbf{X}_t^{\top}\mathbf{X}_t$，再对两端取逆便得到
+\begin{equation}
+\Psi_t=\left(\mathbf{X}_{1:t}^{\top}\mathbf{X}_{1:t}+\gamma\mathbf{I}\right)^{-1}
+=\left(\Psi_{t-1}^{-1}+\mathbf{X}_t^{\top}\mathbf{X}_t\right)^{-1},
+\end{equation}
+这便证明了式(\ref{eq:psi_recursive_basic})。
+
+为了得到 $\Psi_t$ 的显式递归形式，再对上式套用 Woodbury 矩阵恒等式
+\begin{equation}
+(\mathbf{A}+\mathbf{U}\mathbf{C}\mathbf{V})^{-1}
+=\mathbf{A}^{-1}-\mathbf{A}^{-1}\mathbf{U}\left(\mathbf{C}^{-1}+\mathbf{V}\mathbf{A}^{-1}\mathbf{U}\right)^{-1}\mathbf{V}\mathbf{A}^{-1}.
+\label{eq:woodbury}
+\end{equation}
+具体地，应用式~\eqref{eq:woodbury}的 Woodbury 恒等式，并令 $\mathbf{A}=\Psi_{t-1}^{-1}$、$\mathbf{U}=\mathbf{X}_t^{\top}$、$\mathbf{C}=\mathbf{I}$、$\mathbf{V}=\mathbf{X}_t$，便能得到
+\begin{equation}
+\Psi_t=\Psi_{t-1}-\Psi_{t-1}\mathbf{X}_t^{\top}
+\left(\mathbf{I}+\mathbf{X}_t\Psi_{t-1}\mathbf{X}_t^{\top}\right)^{-1}
+\mathbf{X}_t\Psi_{t-1}.
+\label{eq:psi_recursive_woodbury}
+\end{equation}
+
+下面再来推导分类头的递归形式。根据式(\ref{eq:y_concat})，第 $t$ 阶段的互相关矩阵为
+\begin{equation}
+\mathbf{Q}_t=
+\begin{bmatrix}
+\mathbf{X}_{1:t-1}^{\top}\mathbf{Y}_{1:t-1}+\mathbf{X}_t^{\top}\bar{\mathbf{Y}}_t
+&
+\mathbf{X}_t^{\top}\tilde{\mathbf{Y}}_t
+\end{bmatrix}.
+\label{eq:q_t_direct}
+\end{equation}
+借助式(\ref{eq:q_tminus1})就可以把它改写成
+\begin{equation}
+\mathbf{Q}_t=
+\begin{bmatrix}
+\mathbf{Q}_{t-1}+\mathbf{X}_t^{\top}\bar{\mathbf{Y}}_t
+&
+\mathbf{X}_t^{\top}\tilde{\mathbf{Y}}_t
+\end{bmatrix}.
+\label{eq:q_t_expand}
+\end{equation}
+
+把式(\ref{eq:q_t_expand})代入式(\ref{eq:phi_t_psi_q})，便有
+\begin{equation}
+\widehat{\Phi}_t=
+\begin{bmatrix}
+\Psi_t\mathbf{Q}_{t-1}+\Psi_t\mathbf{X}_t^{\top}\bar{\mathbf{Y}}_t
+&
+\Psi_t\mathbf{X}_t^{\top}\tilde{\mathbf{Y}}_t
+\end{bmatrix}.
+\label{eq:phi_t_intermediate}
+\end{equation}
+
+所以接下来只需要进一步化简 $\Psi_t\mathbf{Q}_{t-1}$ 一项。由式(\ref{eq:psi_recursive_woodbury})与式(\ref{eq:q_tminus1})可得
+\begin{align}
+\Psi_t\mathbf{Q}_{t-1}
+&=\Psi_{t-1}\mathbf{Q}_{t-1}
+-\Psi_{t-1}\mathbf{X}_t^{\top}
+\left(\mathbf{I}+\mathbf{X}_t\Psi_{t-1}\mathbf{X}_t^{\top}\right)^{-1}
+\mathbf{X}_t\Psi_{t-1}\mathbf{Q}_{t-1} \\
+&=\widehat{\Phi}_{t-1}
+-\Psi_{t-1}\mathbf{X}_t^{\top}
+\left(\mathbf{I}+\mathbf{X}_t\Psi_{t-1}\mathbf{X}_t^{\top}\right)^{-1}
+\mathbf{X}_t\widehat{\Phi}_{t-1}.
+\label{eq:psi_q_simplify_1}
+\end{align}
+
+接下来要证明如下恒等式成立：
+\begin{equation}
+\Psi_{t-1}\mathbf{X}_t^{\top}
+\left(\mathbf{I}+\mathbf{X}_t\Psi_{t-1}\mathbf{X}_t^{\top}\right)^{-1}
+=\Psi_t\mathbf{X}_t^{\top}.
+\label{eq:key_identity}
+\end{equation}
+
+为此，记
+\begin{equation}
+\mathbf{K}_t=\left(\mathbf{I}+\mathbf{X}_t\Psi_{t-1}\mathbf{X}_t^{\top}\right)^{-1}.
+\end{equation}
+由
+\begin{equation}
+\mathbf{I}=\mathbf{K}_t^{-1}\mathbf{K}_t=
+\left(\mathbf{I}+\mathbf{X}_t\Psi_{t-1}\mathbf{X}_t^{\top}\right)\mathbf{K}_t,
+\end{equation}
+可以推出
+\begin{equation}
+\mathbf{K}_t=\mathbf{I}-\mathbf{K}_t\mathbf{X}_t\Psi_{t-1}\mathbf{X}_t^{\top}.
+\end{equation}
+进而
+\begin{align}
+\Psi_{t-1}\mathbf{X}_t^{\top}\mathbf{K}_t
+&=\Psi_{t-1}\mathbf{X}_t^{\top}
+\left(\mathbf{I}-\mathbf{K}_t\mathbf{X}_t\Psi_{t-1}\mathbf{X}_t^{\top}\right) \\
+&=\left(\Psi_{t-1}-\Psi_{t-1}\mathbf{X}_t^{\top}\mathbf{K}_t\mathbf{X}_t\Psi_{t-1}\right)\mathbf{X}_t^{\top}.
+\end{align}
+对照式(\ref{eq:psi_recursive_woodbury})可知，上式右端恰为 $\Psi_t\mathbf{X}_t^{\top}$，故而式(\ref{eq:key_identity})得证。
+
+再把式(\ref{eq:key_identity})代回式(\ref{eq:psi_q_simplify_1})，便有
+\begin{equation}
+\Psi_t\mathbf{Q}_{t-1}=\widehat{\Phi}_{t-1}-\Psi_t\mathbf{X}_t^{\top}\mathbf{X}_t\widehat{\Phi}_{t-1}.
+\label{eq:psi_q_simplify_2}
+\end{equation}
+
+最后把式(\ref{eq:psi_q_simplify_2})代入式(\ref{eq:phi_t_intermediate})，立即得到
+\begin{equation}
+\widehat{\Phi}_t=
+\begin{bmatrix}
+\widehat{\Phi}_{t-1}-\Psi_t\mathbf{X}_t^{\top}\mathbf{X}_t\widehat{\Phi}_{t-1}+\Psi_t\mathbf{X}_t^{\top}\bar{\mathbf{Y}}_t
+&
+\Psi_t\mathbf{X}_t^{\top}\tilde{\mathbf{Y}}_t
+\end{bmatrix},
+\end{equation}
+即式(\ref{eq:phi_recursive_final})。也就是说，借助上一阶段统计量与当前阶段数据所得到的递归更新结果，与直接访问全部历史样本所得到的联合训练闭式解完全一致，定理因此得证。
+\end{proof}
+
+\section{持续学习闭式求解算法}
+
+为了方便后文使用，将上文推导总结为一个完整的递归岭回归闭式求解持续学习算法~\ref{alg:cfcl}。该算法以阶段作为基本处理单位，在第一阶段完成编码器学习并令统计量初始化为$\Psi_0=(\gamma\mathbf{I})^{-1},\widehat{\Phi}_0=\mathbf{0}$；之后每一轮只用本轮数据$\mathcal{D}_t$以及上一轮得到两组紧凑统计量$(\Psi_{t-1},\widehat{\Phi}_{t-1})$进行更新从而获得新的$(\Psi_t,\widehat{\Phi}_t)$，然后就可以删除该轮所有原始样本满足无历史样本回放。
+
+\begin{algorithm}[t]
+\caption{递归岭回归闭式解持续学习（统一算法）}
+\label{alg:cfcl}
+\begin{algorithmic}[1]
+\REQUIRE 阶段序列 $t=1,2,\ldots,T$；正则化系数 $\gamma>0$；编码器 $f_\theta$
+\STATE \textbf{初始化：} $\Psi_0\leftarrow(\gamma\mathbf{I})^{-1}$，$\widehat{\Phi}_0\leftarrow\mathbf{0}$
+\STATE 以监督学习方式在 $\mathcal{D}_1$ 上训练编码器 $f_\theta$，随后冻结其参数
+\FOR{阶段 $t=1$ \TO $T$}
+    \STATE 提取特征矩阵：$\mathbf{X}_t\leftarrow f_\theta(\mathcal{D}_t)$
+    \STATE 构造分块标签：$\mathbf{Y}_t\leftarrow[\bar{\mathbf{Y}}_t,\,\tilde{\mathbf{Y}}_t]$
+    \STATE \COMMENT{借助 Woodbury 恒等式更新逆自相关矩阵}
+    \STATE $\Psi_t\leftarrow\Psi_{t-1}-\Psi_{t-1}\mathbf{X}_t^{\top}\big(\mathbf{I}+\mathbf{X}_t\Psi_{t-1}\mathbf{X}_t^{\top}\big)^{-1}\mathbf{X}_t\Psi_{t-1}$
+    \STATE \COMMENT{按定理 \ref{thm:closed_form_recursive} 更新解析分类头}
+    \STATE $\widehat{\Phi}_t\leftarrow\begin{bmatrix}
+    \widehat{\Phi}_{t-1}-\Psi_t\mathbf{X}_t^{\top}\mathbf{X}_t\widehat{\Phi}_{t-1}+\Psi_t\mathbf{X}_t^{\top}\bar{\mathbf{Y}}_t & \Psi_t\mathbf{X}_t^{\top}\tilde{\mathbf{Y}}_t
+    \end{bmatrix}$
+    \STATE 释放 $\mathcal{D}_t$，只保留紧凑统计量 $(\Psi_t,\widehat{\Phi}_t)$
+\ENDFOR
+\RETURN 最终的解析分类头 $\widehat{\Phi}_T$
+\end{algorithmic}
+\end{algorithm}
+
+第四章针对四类任务给出的应用方法都可看作算法~\ref{alg:cfcl} 在不同的特征表示方式下进行实现的具体情况虽然有所不同，但其基本思想是一致的。
+
+\section{算法分析}
+
+从结果形式可以看出，递归岭回归闭式解只需保存两项内容即可：一个是解析分类头$\widehat{\Phi}_{t-1}$；另一个是逆自相关矩阵$\Psi_{t-1}$。因此，在$t$时刻进行更新时无需访问之前的数据点，也无需对之前的任务进行反向传播梯度下降更新，算法中增量部分主要是矩阵乘法以及矩阵求逆操作，而矩阵求逆仅需对于大小为$d\times d$的统计量求逆，这与总的样本数无关，这也是这种方法能够在大量任务上获得良好的性能的原因所在。
+
+从时间复杂度考虑，如果当前阶段的样本数量为 $N_t$，那么求 $\mathbf{X}_t^{\top}\mathbf{X}_t$ 所需的代价为 $O(N_td^2)$，更新 $\Psi_t$ 的主要成本在于求逆运算，即 $O(d^3)$；而对分类头 $\widehat{\Phi}_t$ 进行更新需要多次矩阵相乘，其总代价为 $O(d^2 N_t + d N_t^2 + d^2 d_{C_t})$，与特征维度 $d$、当前阶段样本数 $N_t$ 以及到目前为止已经出现的所有类别数目 $d_{C_t}$ 都有关系。由于以上工作都可以在 GPU 上快速完成计算，因此本方法一般情况下要比基于多轮梯度下降反向传播不断优化的学习机制更快。
+
+从空间复杂度上考虑，该算法需要存储的内容主要是 $\Psi_t\in\mathbb{R}^{d\times d}$、当前的数据矩阵 $\mathbf{X}_t\in \mathbb{R}^{N_t\times d}$、分类头 $\widehat{\Phi}_t\in \mathbb{R}^{d\times d_{C_t}}$，因此总的所需空间大约是 $O(d^2+d N_t+d\,d_{C_t})$，其中 $O(d^2)$ 用于存储 $\Psi_t$，$O(d N_t)$ 用于存储特征矩阵 $\mathbf{X}_t$，$O(d\,d_{C_t})$ 用于存储分类头 $\widehat{\Phi}_t$。更重要的是这种开销只会随着出现的类别数量增加而增加，不是随着样本数量的增加而增加，也就解决了回放缓存日益增大问题。
+
+此外，该框架还具有隐私保护的特点，该方法不会保存任何历史原始样本，仅保存统计量矩阵，因此比较适合医疗数据等隐私要求较高的情况。下面给出隐私保护性质的形式化陈述与证明。
+
+\begin{theorem}[隐私保护性]\label{thm:privacy}
+给定逆自相关统计量 $\Psi$，无法通过逆向工程唯一地重建原始数据矩阵 $\mathbf{X}$，从而保证了原始样本的隐私。
+\end{theorem}
+
+\begin{proof}
+证明的关键是 $\Psi$ 只与数据二阶协方差信息有关即 $\mathbf{X}^{\top}\mathbf{X}$，而不包含原始样本的具体取值。设 $\mathbf{X}^{\top}\mathbf{X}=\mathbf{A}$，则满足此等式的 $\mathbf{X}$ 不是唯一的，有无穷多个可能的结果，即对于所有满足正交性条件 $\mathbf{U}^{\top}\mathbf{U}=\mathbf{I}$ 的正交矩阵 $\mathbf{U}$，令变换后的矩阵 $\mathbf{X}'=\mathbf{U}\mathbf{X}$，那么就有
+\begin{equation}
+(\mathbf{X}')^{\top}\mathbf{X}' = \mathbf{X}^{\top}\mathbf{U}^{\top}\mathbf{U}\mathbf{X} = \mathbf{X}^{\top}\mathbf{X} = \mathbf{A}.
+\end{equation}
+即 $\mathbf{X}'$ 与原始 $\mathbf{X}$ 对应同一个 $\Psi$。因此，仅凭 $\Psi$ 至多只能将 $\mathbf{X}$ 确定到一个正交变换的等价类，无法还原出原始数据本身，定理得证。
+\end{proof}
+
+这一节提供的递归闭式解可以看作是第四章针对四种应用提出的相应解决方案的核心思想。
+
+\section{本章小结}
+
+本章从理论上给出了闭式解持续学习的一般框架。首先将编码器被冻结后仅分类头的学习看作一个岭回归问题并求出联合训练条件下的最优解；然后定义逆自相关矩阵和标签分块形式将上述最优解用不需要访问所有原始的历史样本的形式进行表达；接着利用一系列矩阵恒等变换及推导证明这两种形式是等价的。即说明：在持续学习过程中我们完全可以不用反向传播而是通过保存少量统计数据就可以得到高效、鲁棒并且对隐私友好的解析式更新方法。而在下一章中将会详细探讨这种算法如何应用于实际问题中如医学图像疾病的识别、时间序列分类、语义分割以及多模态的大语言模型等。

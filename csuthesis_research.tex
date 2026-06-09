@@ -1,0 +1,33 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 调研报告主文件（独立于本科毕业论文）
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\documentclass[type=research, output=electronic, fontset=none]{csuthesis}
+
+\usepackage[backend=biber,style=gb7714-2015,gbnamefmt=uppercase,gbpub=false,gbpunctin=false,gbalign=gb7714-2015]{biblatex}
+\renewcommand{\bibfont}{\zihao{5} \kgb}
+\addbibresource{csuthesis_main.bib}
+
+\counterwithin{figure}{chapter}
+\counterwithin{table}{chapter}
+\usepackage{graphicx}
+\usepackage{booktabs}
+
+\input{content/info}
+\renewcommand{\abstracttitlecn}{调研报告}
+\renewcommand{\abstracttitleen}{RESEARCH REPORT}
+
+\begin{document}
+
+\maketitle
+
+\frontmatter
+\include{content/research_abstractzh}
+\include{content/research_abstracten}
+\tableofcontents
+
+\mainmatter
+\include{content/research_report}
+
+\printbibliography
+
+\end{document}

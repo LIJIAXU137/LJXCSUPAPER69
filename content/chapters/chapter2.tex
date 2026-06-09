@@ -1,0 +1,180 @@
+%!TEX root = ../../csuthesis_main.tex
+\chapter{持续学习研究现状}
+
+本章总结回顾持续学习相关工作。一方面需要总结持续学习基本问题以及困难所在，以便后面章节内容展开奠定基础；另一方面需要按不同方法主要思想把现有工作划分到几大类中，并对其代表工作进行分析比较优势劣势等，从而突出本文围绕闭式解研究思路。本章组织结构如下：第2.1节首先提出持续学习问题及常见应用场景；第2.2至第2.4节分别阐述基于回放、基于正则化以及基于结构扩展或者参数隔离三种传统方法；第2.5节着重介绍了本文所采用的解析持续学习方法；第2.6节简单介绍了持续学习领域常用评估标准；第2.7节为本章总结。本章所使用的图片及分类依据主要参考最近关于持续学习综述性文章~\citep{wang2024survey, zhou2024class, zhou2023cil_survey_zh, wang2025llm_cl_zh}。
+
+如图~\ref{fig:dynamic_ml} 所示，持续学习也可视为一种动态环境中的机器学习问题，在长时间运行中不仅要拟合当前的数据分布还要能够在数据分布以及任务目标甚至是模型本身发生变化时仍具有良好的鲁棒性~\citep{wang2025llm_cl_zh}。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.75\textwidth,height=0.4\textheight,keepaspectratio]{images/surveys/dynamic_ml_wang2025.png}
+\caption{动态场景下的机器学习问题示意。在长期部署期间，模型不仅要应对数据分布的变化，还可能要同步应对任务、模型与目标的变化（图源~\citet{wang2025llm_cl_zh}）。}
+\label{fig:dynamic_ml}
+\end{figure}
+
+\section{持续学习问题与典型设定}
+
+持续学习，在相关文献中也被称作增量学习或者终身学习。它所关心的一个问题可以表述为：如果数据以批次的形式不断流入，类别集合或者数据分布发生变化的情况下，如何让模型保持对早期任务的识别能力的同时获得新任务的知识~\citep{wang2024survey,zhou2024class}。而这个最大的挑战就是稳定性——可塑性困境，即一个过于稳定的学习器无法学到新的任务，而一个过于灵活的学习器又会把之前学到的知识忘掉~\citep{mccloskey1989catastrophic,goodfellow2013catastrophic}。
+
+把这一困境再做一层形式化的刻画会更直观。记阶段 $t$ 上的损失为 $\mathcal{L}_t(\theta)$、全阶段联合训练损失为 $\mathcal{L}_{1:T}(\theta)=\sum_{k=1}^{T}\mathcal{L}_k(\theta)$，则持续学习的隐含目标是让顺序训练得到的参数 $\theta_T$ 尽可能接近 $\arg\min_\theta \mathcal{L}_{1:T}(\theta)$。然而在阶段 $t$ 上若仅最小化 $\mathcal{L}_t$，其梯度 $\nabla\mathcal{L}_t$ 一旦与某个 $\nabla\mathcal{L}_k\,(k<t)$ 方向不一致，顺序更新就会拉着参数沿对历史任务而言上坡的方向移动，表征空间随之发生漂移、旧类别的判别边界由此被破坏~\citep{wang2024survey,zhou2023cil_survey_zh}。而从表示学习的角度来看，则是新旧类别的表示之间重叠程度增加以及分类器的权重改变，这也正是下面将介绍的解析持续学学习方法选择一次求出所有阶段的最佳分类器的原因所在：而不是每一步都进行小范围梯度下降并且希望正则化项可以纠正方向，而是直接消除局部最优解与全局最优解之间的差异。
+
+参考综述~\citep{wang2024survey,zhou2024class,zhou2023cil_survey_zh}的分类，当前常见的持续学习场景大致可划入图~\ref{fig:three_il} 所呈现的三种典型设定。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.4\textheight,keepaspectratio]{images/surveys/three_il_settings_zhou2023.png}
+\caption{三种典型增量学习设定示意：任务增量学习（Task-IL）、类别增量学习（Class-IL）与域增量学习（Domain-IL）（图源~\citet{zhou2023cil_survey_zh}）。}
+\label{fig:three_il}
+\end{figure}
+
+最宽松的是任务增量学习(Task-Incremental Learning, Task-IL)：每一轮是一个具体任务(例如不同分类问题或者不同输出空间)，并且在推理时也知道当前样本来自什么任务，在这个任务对应的输出空间中进行判断即可。限制最少，一般作为算法测试的基础环境。
+
+然后难度提升一个等级是类别增量学习(Class-Incremental Learning, Class-IL)。每一个新阶段都会有新的类别出现，但是这些新的类别不会与之前出现过的类别有交集；在测试过程中需要让模型对所有的类进行一次分类并且在推理过程中不再告知模型当前的数据属于哪一个任务~\citep{zhou2023cil_survey_zh}。这也是目前研究最多的一个场景，本文所关注的医学图像疾病的分类、时间序列分类、语义分割以及多模态模型专家路由的问题中都属于此类。Class-IL 训练-测试的过程如图所示。 Class-IL 的训练—测试协议示意见图~\ref{fig:cil_setting}。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.85\textwidth,height=0.4\textheight,keepaspectratio]{images/surveys/cil_setting_zhou2023.png}
+\caption{类别增量学习问题设定示意：模型按顺序学习不断到来的新类别，并在所有已见过的类别上接受测试（图源~\citet{zhou2023cil_survey_zh}）。}
+\label{fig:cil_setting}
+\end{figure}
+
+第三类是域增量学习（Domain-Incremental Learning，Domain-IL）。它的特点恰好与 Class-IL 互补：类别集合大体固定，但输入分布会在不同阶段发生变化——可能是不同环境、不同采集设备、或者不同领域。
+
+除了以上三种主要设置外，在一些工作中也存在一些变种：在线持续学习（online continual learning）对每一个样本仅进行一次遍历~\citep{de2021continual}；少样本持续学习（few-shot CL）针对新任务中较少的样本数量；而开放世界持续学习更进一步包括未见过的新类别识别的问题。本文主要基于Class-IL设置来进行讨论，因此在后续的方法部分会使用相应的符号表示。
+
+本文统一运用以下符号约定：第 $t$ 个阶段的数据集记为 $\mathcal{D}_t=\{\mathbf{X}_t,\mathbf{Y}_t\}$，新类别集合记为 $\mathcal{S}_t$。三种设定可分别对应到：(1) Class-IL，$\mathcal{S}_i\cap \mathcal{S}_j=\varnothing$ 且在推理时的任务标签是未知的；(2) Domain-IL，类别空间固定而输入数据的概率分布会变化；(3) Task-IL，类别空间可不相交但推理阶段时任务标签已知。后续第 3 章会沿用上述记号构建统一的闭式解框架。
+
+\section{基于回放的持续学习方法}
+
+这是比较早的一类方法，在工业界也最受欢迎。思路非常简单：将过去的数据存储起来，在有新的任务时，让它们与新的数据一起进行学习，从而保证原有的类别的区分度~\citep{wang2024survey, zhou2024class, wang2025llm_cl_zh}。综述~\citep{wang2025llm_cl_zh}将回放的对象进行了分类（如图~\ref{fig:data_replay}：样本回放、特征回放、生成回放。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.55\textwidth,height=0.5\textheight,keepaspectratio]{images/surveys/data_replay_wang2025.png}
+\caption{数据层面的持续学习方法示意，涵盖样本回放、特征回放与生成回放三种典型形式（图源~\citet{wang2025llm_cl_zh}）。}
+\label{fig:data_replay}
+\end{figure}
+
+从数学的角度看，回放方法就是把原来的单任务的目标进行一次扩大，即让历史样本也参与到梯度中去计算。设第$t$个阶段的缓存集是$\mathcal{B}_{t-1}=\{(x_b, y_b)\} \subset \bigcup_{k<t}\mathcal{D}_k$，权衡系数为$\beta > 0$，那么一种常见的回放方法的学习目标可以表示为
+\begin{equation}
+\min_{\theta}\;\;\frac{1}{|\mathcal{D}_t|}\sum_{(x,y)\in\mathcal{D}_t}\ell\!\big(f_\theta(x),y\big)\;+\;\beta\cdot\frac{1}{|\mathcal{B}_{t-1}|}\sum_{(x_b,y_b)\in\mathcal{B}_{t-1}}\ell\!\big(f_\theta(x_b),y_b\big),
+\label{eq:replay_obj}
+\end{equation}
+其中第一部分关注对新数据拟合（可塑性），第二部分通过使模型不能远离已有训练样本（稳定性）。一种比较有代表性的方法是iCaRL~\citep{rebuffi2017icarl}，该方法使用示例选择保留一定数量的数据集，在此基础上采用最近类均值进行预测。
+\begin{equation}
+\hat{y}\;=\;\arg\min_{c}\;\big\|\phi(x)-\mu_c\big\|_2,\qquad
+\mu_c\;=\;\frac{1}{|\mathcal{B}_{c}|}\sum_{x\in\mathcal{B}_{c}}\phi(x),
+\label{eq:icarl_ncm}
+\end{equation}
+其中 $\phi(\cdot)$ 是冻结特征提取器，而 $\mu_c$ 是缓冲区里类别$c$特征均值。这个方法至今仍是Class-IL的一种优秀基线。在此之上，EEIL~\citep{castro2018end}提出了端到端的学习以及均衡微调；GEM与A-GEM系列~\citep{chaudhry2019continual}更是进了一步，使用以前的数据进行梯度合法性的检查——即新任务梯度$g_t$应该与所有历史代表性梯度$g_k$保持正值内积。
+\begin{equation}
+g_t^{\top}g_k\;\geq\;0,\qquad k=1,2,\ldots,t-1,
+\label{eq:gem_constraint}
+\end{equation}
+否则将其投影到约束空间内，从而以显式的方式防止历史损失增大。
+
+如何维护缓冲区，这也是此类方法无法回避的问题。根据梯度信息选取样本的方法~\citep{rolnick2019experience,aljundi2019gradient,isele2018selective}都是在样本到达的时候就判断其能否进入缓冲区以避免简单的先入先出造成样本代表性不足的问题；MIR~\citep{aljundi2019gradient}的做法是在每次训练中选择最难被新学到的内容所覆盖的老样本进行重放。而在回放的对象方面也有多种变种：DER~\citep{buzzega2020dark}将回放样本定义为样本+其对应的logits，以此来保留旧模型中的判别能力；FastICARL~\citep{FASTICARL}及其相关工作都是在iCaRL的基础上进行轻量化部署；此外还有一些直接舍弃原始图像而只保存特征或者类原型的工作——这进一步降低存储开销和对隐私的要求。PASS++~\citep{zhu2024pass++}以及基于原型对齐的一系列方法~\citep{zhu2021prototype,snell2017prototypical}都可以归结为这种方法。
+
+回放方法的优点是简单易懂并且效果可靠。但是也有缺点——需要存储历史信息。而在医学影像、用户隐私数据以及边缘端部署等情况下，这往往是不能容忍的；如果缓存空间有限，则会产生样本代表性差的问题，进而导致训练集不平衡从而容易造成遗忘~\citep{wang2024survey,zhou2023cil_survey_zh}。而生成式回放则是希望通过一个生成器去拟合历史数据分布以避免这个问题。但是生成器自身也存在遗忘问题，而且对于高分辨率自然图像或者多模态的数据建模效果较差。
+
+\section{基于正则化的持续学习方法}
+
+正则化路径和回放路径的不同之处在于：它并不存储原始样本，在损失函数中增加一个额外的项以使重要的参数在新任务中的可移动距离受到约束。如果从优化的角度来看，这种方法实际上就是使得新旧任务损失之间梯度对齐以及损失曲面光滑~\citep{wang2025llm_cl_zh}如图\ref{fig:optimization_reg}所示。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.42\textwidth,keepaspectratio]{images/surveys/optimization_wang2025_ab.png}\hspace{1em}%
+\includegraphics[width=0.42\textwidth,keepaspectratio]{images/surveys/optimization_wang2025_cd.png}
+\caption{从优化角度考虑的持续学习策略：利用梯度对齐以及损失曲面平滑减少新旧任务之间的影响（图源~\citet{wang2025llm_cl_zh}）。}
+\label{fig:optimization_reg}
+\end{figure}
+
+EWC~\citep{kirkpatrick2017ewc}、SI~\citep{zenke2017continual} 和 MAS~\citep{aljundi2018memory} 是这一方向有影响力的工作，它们都计算每个参数的一个重要性，然后通过二次项约束使这些参数靠近之前的最优值。比如对于 EWC，在上一个任务训练结束时获得的参数是 $\theta^{\circ}$，其对应的重要性向量是 $\Omega=\{\omega_i\}$，那么在第 $t$ 个任务中要优化的目标就是
+\begin{equation}
+\widetilde{\mathcal{L}}_{t}(\theta)\;=\;\mathcal{L}_t(\theta)\;+\;\frac{\lambda}{2}\sum_{i}\omega_i\,(\theta_i-\theta^{\circ}_i)^{2},
+\label{eq:ewc_obj}
+\end{equation}
+其中 $\omega_i=\mathbb{E}_{(x,y)\sim\mathcal{D}_{t-1}}\big[(\partial \log p_\theta(y|x)/\partial\theta_i)^2\big]\big|_{\theta=\theta^\circ}$ 是费舍尔信息矩阵的对角线元素，表示参数 $\theta_i$ 在之前的任务中所起的作用；而 $\lambda > 0$ 是控制正则化项整体强度的超参数；$\omega_i$ 越大说明参数 $\theta_i$ 在以前的任务中起到的作用越大，应尽量保留它。这种方法不需要保存任何先前的数据，在隐私受到限制的情况下具有优势。
+
+另一类正则化方法是从函数本身进行限制，最典型的就是基于知识蒸馏的方法LwF~\citep{li2017learning}：在学习新任务的同时让旧模型对于当前数据的预测结果成为新模型的目标，从而使得新模型也具有类似旧任务的判别能力。它可以表示为
+\begin{equation}
+\mathcal{L}_{\mathrm{LwF}}(\theta)\;=\;\underbrace{\mathcal{L}_{\mathrm{CE}}\!\big(f_\theta(x),y\big)}_{\text{新任务交叉熵}}\;+\;\eta\cdot\underbrace{\mathcal{L}_{\mathrm{KD}}\!\big(\sigma_\tau(f_{\theta^{\circ}}(x)),\,\sigma_\tau(f_\theta(x))\big)}_{\text{旧模型软目标蒸馏}},
+\label{eq:lwf_obj}
+\end{equation}
+其中 $\sigma_\tau(\cdot)$ 是带有温度 $\tau$ 的softmax，$f_{\theta^{\circ}}$ 是被冻结的旧模型，$\eta$ 控制蒸馏损失的比例。一般而言蒸馏损失 $\mathcal{L}_{\mathrm{KD}}$ 使用带温度的KL散度或者交叉熵表示。一些后续的工作在分类及分割上对蒸馏目标进行了优化；而在语义分割中，MiB~\citep{cermelli2020mib}以及PLOP~\citep{douillard2021plop}提出了将背景类别建模以及中间层特征蒸馏作为重要限制条件。
+
+在上述基本形式基础上，后续工作沿着两个方向进行探索：一个是如何让参数重要性评估更加鲁棒： 文献~\citep{schwarz2018progress} 使用滑动平均保存一个全局费舍尔信息，避免为每一个任务保存一个 $\Omega$ 所带来的存储开销问题；RWalk ~\citep{chaudhry2021using} 将 EWC 和 SI 两种重要性测度进行加权组合，使得惩罚项对于不同类型的变化更为鲁棒。另一个是从梯度的角度来进行限制，也就是梯度投影族的方法：首先估计已经学习的任务所对应的特征或者梯度子空间，然后将新的任务梯度投影到这个子空间的补空间中去，这样可以使得参数更新从理论上来说极少影响旧任务的结果~\citep{wang2023orthogonal, chaudhry2019continual, lopez2017gradient}。这与本文所使用的方法在思路上是一致的：二者都在线性代数上给出了不破坏旧解的硬约束。但是区别也很明显：本文给出了闭式解一劳永逸，而梯度投影族还需要不断优化并不断逼近已经学习的任务子空间，在大量的任务之后很容易达到子空间满秩的情况。
+
+正则化方法存在两个问题比较明显。首先，参数重要性估计是近似，当任务间差别增大时该近似便不再成立。其次，约束项大小很难在稳定性和灵活性之间取舍，在任务很多的情况下正则项往往过大以至于模型无法学习新任务~\citep{zhou2023cil_survey_zh}。而本文的方法虽然开始时也冻结编码器，但是在后续增加过程中就不需要使用梯度来更新以及相应的正则约束，而是给出一个最优的分类头，因此从本质上避免这类方法所面临的问题。
+
+\section{基于结构扩展或参数隔离的方法}
+
+第三种方法不同于上面两种方法之处在于，既不对数据进行存储，也不在损失中增加约束条件，而是给每一个任务分配一个属于自己的参数子空间，使得任务之间不会发生冲突，在从结构上来划分的话，这几种方式都可以归纳为三种类型：子网络的选择、动态网络的增长、参数分离~\citep{wang2025llm_cl_zh}如图\ref{fig:architecture}所示。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.95\textwidth,height=0.4\textheight,keepaspectratio]{images/surveys/architecture_wang2025.png}
+\caption{在模型结构上实现持续学习的方法是利用参数隔离、子网络掩码甚至根据不同任务分配不同参数子空间等（参考文献~\citet{wang2025llm_cl_zh}）。}
+\label{fig:architecture}
+\end{figure}
+
+Progressive Networks~\citep{rusu2016progressive} 是这方面最早提出的方法。它也很简单明了：每次加入一个新的任务便增加一组新的网络模块并且通过侧向连接重用之前的学习表示。Expert Gate~\citep{aljundi2017expert}在此基础上引入门控机制根据给定输入选择合适的专家网络。这可以避免由于参数共享导致的知识被覆盖的问题但是也带来了明显的缺点即随着任务数量增加而增加的大量的模型参数以及需要知道当前的任务是什么以便确定所使用的子结构。
+
+走另一条路的工作是不再为每个任务创建新的结构，而是在一个公共的基础结构之上通过二值掩码或者剪枝定义出不同的任务各自的参数子集。Piggyback~\citep{mallya2018piggyback} 让所有的任务共享一个权重矩阵，每个任务有其独立的学习得到掩码，在几乎不增加参数的情况下达到类似硬分离的效果；而HAT~\citep{serra2018hat} 使用可学习的注意力门控代替掩码完成同样的工作。这种方法在参数效率上优于按列增加的方式，但是掩码或门控仍然需要进行梯度优化，在测试阶段也需要用到任务身份选择合适的掩码。
+
+时间再往后一些，在大模型以及参数高效微调出现之后，基于LoRA等低秩适配器的参数隔离是目前最常用的方法~\citep{hu2021lora, wang2023orthogonal, chen2024coin, wang2025llm_cl_zh}。即原始权重 $W_0 \in \mathbb{R}^{m \times n}$ 固定不变，每个任务的参数变化 $\Delta W$ 放在一小部分低维子空间内，然后用大小为 $U \in \mathbb{R}^{m \times r}$ 和 $V \in \mathbb{R}^{r \times n}$（$r << min(m, n)$）两个小矩阵相乘获得。
+\begin{equation}
+W^{(t)}=W_0+\Delta W^{(t)},\quad \Delta W^{(t)}=U^{(t)}V^{(t)},
+\label{eq:lora_decomp}
+\end{equation}
+训练过程中仅使$\{U^{(t)}, V^{(t)}\}$参与梯度计算。每个任务拥有一个独立的低秩矩阵后，在新的任务中其权重更新只局限于该任务对应的子空间中，因此增加的额外参数很少，而且每个任务所独有的知识也被保留下来。而在第四章提出的多模态大语言模型专家路由方法就是基于这种专家隔离的思想——对于每一个特定的任务都有一个LoRA专家，而主体部分始终处于冻结状态，不同专家之间不会共享参数。
+
+伴随大模型时代的另一条线是基于提示的持续学习，L2P~\citep{wang2022s} 和 DualPrompt~\citep{wang2022dualprompt} 冻结视觉或者语言骨干网络，只学习一小部分与任务相关提示向量，在推理过程中通过提示查询 从这些提示中挑选出最适合当前输入的一个或者多个；CODA-Prompt~\citep{smith2023coda} 将提示组合成可微分的注意力加权形式解决了提示之间的可微性问题；Progressive Prompts~\citep{razdaibiedina2023progressive} 在序列任务中让提示一层一层叠加，促进积极迁移。它们的基本思路都是“固定骨干+轻量级任务部分”，即骨干不参与梯度更新，而任务知识存在于可以更换的小块里面。但是提示类方法中的轻量级任务部分仍然是需要用梯度进行优化，在较长序列的任务中容易出现不同 prompt 之间的互相影响以及提示查询头遗忘的问题。
+
+需说明的是，参数隔离并不能完全摆脱遗忘，也需要一个路由器或者门控网络来选择在推理过程中使用哪个专家、哪些子结构。而如果这个路由器本身还要进行梯度下降训练，则它又会遗忘。我们提出的方法就是将解析学习的思想引入到路由器的学习当中，在路由器的学习中也采用闭式解的形式解决这个问题。
+
+\section{基于解析持续学习的方法}
+
+第四条线，也是本文方法所归属的方向，是近年来逐渐被重视解析学习持续方法。这类方法的核心思想可简化为一句话：将分类头学习从梯度迭代转变为具有正则项的最小二乘问题，然后用矩阵求逆或者递归得到全局最优解~\citep{zhuang2022acil,zhuang2024dsal}。已有研究表明，在标准类别增量分类任务中，只需要保留很少几个统计数据（自相关矩阵以及互相关矩阵），就可以实现增量更新，不需要存储任何历史原始数据，每轮次更新的结果都可以和对应的联合训练解析解完全一致~\citep{fang2024air,GKEAL_Zhuang_CVPR2023}。
+
+放在前面三种途径下进行对比分析可以更加清晰地看到解析持续方法的优势所在。相比于正则化无样本方法，解析方法不需要通过惩罚项来约束参数，而是直接从理论上保证旧类别分类边界的完整性；相比于回放方法，只需要存储统计量矩阵而不是全部样本，因此更适用于对隐私要求较高的情况。上述特点就是我们进行本课题研究的基础，在第三章中将以递归岭回归闭式解为基础建立相应的理论框架；而在第四章中将进一步将该思想应用于具体的医学图像、时间序列、语义分割以及多模态大语言模型等实际问题当中。
+
+\section{评价指标}
+
+为了能够在下一章节能够统一标准进行比较，在此对持续学习中常见的一些评估标准进行总结。本文所采用的标准主要参考综述~\citep{wang2024survey, zhou2024class, zhou2023cil_survey_zh}中的三种，即平均准确率、平均遗忘率以及反向迁移。设整个任务序列有 $T$ 个任务，$a_{t,i}$ 是模型在进行完第 $t$ 轮学习后，在任务 $i\ (i \le t)$ 的测试集上所达到的效果（准确率或者 mIoU），那么这三者就可以用以下方式表示：
+
+\paragraph{平均准确率} 在最后一步$T$结束时，对所有以前见过的任务进行评估求平均数，即映射模型在完成所有任务后整体上所达到的准确度。
+\begin{equation}
+\mathrm{ACC}=\frac{1}{T}\sum_{i=1}^{T}a_{T,i}.
+\label{eq:metric_acc}
+\end{equation}
+而对于稠密预测任务，只需要将$ a_{t, i} $替换为相应任务上平均交并比（mIoU）。
+
+\paragraph{平均遗忘率}用来衡量学习一个新任务后旧任务的性能降低的程度，在每一个旧任务$i (i<T)$上，把其被首次学习之后、最终阶段之前的最佳表现值用$\max_{i\leq k\leq T-1} a_{k,i}$表示，则平均遗忘率为
+\begin{equation}
+\mathrm{Forgetting}=\frac{1}{T-1}\sum_{i=1}^{T-1}\Big(\max_{i\le k\le T-1} a_{k,i} \;-\; a_{T,i}\Big).
+\label{eq:metric_forget}
+\end{equation}
+其中下标取值范围是 $i \le k \le T-1$ 是为了保证计算历史上的最大值时仅在任务 $i$ 已经被学习但未到最终评价的那个时间段内计算；最后的任务 $T$ 由于不存在后续的时间段因此不在遗忘率中考虑。这个指标数值越小说明模型对于老的任务的记忆能力越强。
+
+\paragraph{后向迁移} 是用来评估后期的任务训练对前面的任务所起到的作用，在这里它是这样计算的
+\begin{equation}
+\mathrm{BWT}=\frac{1}{T-1}\sum_{i=1}^{T-1}(a_{T,i}-a_{i,i}).
+\label{eq:metric_bwt}
+\end{equation}
+当 $\mathrm{BWT} \approx 0$，说明新任务学习对原有任务辨别能力影响不大；而 $\mathrm{BWT}>0$，表示新任务学习使原有任务性能得到提升，这更好。
+
+\paragraph{多模态大语言模型持续学习专用指标} 在多模态大语言模型专家路由场景下，已有多个领域的基线~\citep{zhao2025mllm}除了上述指标外还引入了以下三种评价标准：末轮全任务平均准确率(Mean Final Total accuracy, MFT)、末轮新任务平均准确率(Mean Final performance on Novel tasks, MFN)以及平均累积准确率(Mean Average Accuracy, MAA)，它们形式化的表示为
+\begin{equation}
+\mathrm{MFT} = \frac{1}{T}\sum_{i=1}^T a_{T, i},
+\mathrm{MFN}=\frac{1}{T}\sum_{i=1}^{T} a_{i,i}.
+\mathrm{MAA}=\frac{1}{T}\sum_{t=1}^{T}\frac{1}{t}\sum_{i=1}^{t}a_{t,i}.
+\label{eq:metric_mllm}
+\end{equation}
+其中 $\mathrm{MFT}=\frac{1}{T}\sum_ia_{T,i}$ 在数学上等于公式~\eqref{eq:metric_acc}中的平均准确率$\mathrm{ACC}$，为了便于与此前相关工作保持一致，我们采用了MLLM-CL基准~\citep{zhao2025mllm}中对于此指标的称呼即最终整体识别率，用于体现整个过程最后的结果；而$\mathrm{MFN}=\frac{1}{T}\sum_ia_{i,i}$是每个任务第一次训练完成后在自身任务上的正确率，反映了模型在每一个新任务出现时立即具备的能力或者说灵活性；最后MAA是对所有阶段的学习过程中的平均表现再求均值，表示长久以来的效果。这三个以及BWT构成了第五章对于多模态大语言模型专家路由方法进行评价的标准。
+
+第五章实验中采用以上标准评价本研究所提出的方法与其他几种基线方法。
+
+\section{本章小结}
+
+本章总结目前持续学习的方法体系。在问题设置上总结任务、类别以及域这三种常见情况，在此之中本文的研究集中在类别以及域这两种情况下。而从方法上看按其核心思想分为基于回放、基于正则化、基于结构扩展、三大类，分别介绍了它们各自代表的工作及其缺点；再通过示意图的形式从数据、优化、结构三个方面进行总结，参考最近的一篇综述文章~\citep{wang2025llm_cl_zh}的内容。然后引入近年来兴起的一种新的解析持续学习的方法，这就是本文所采用的方法的思想来源。最后简单列举一些在持续学习中常用到的评估标准以便之后实验部分能够做到公平合理。下一节将会以解析学习为基础搭建全文统一递归岭回归闭式解的基础知识。

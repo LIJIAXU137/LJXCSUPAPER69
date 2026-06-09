@@ -1,0 +1,324 @@
+%!TEX root = ../../csuthesis_research.tex
+
+\chapter{研究背景、现状与问题定义}
+
+\section{选题背景与研究意义}
+
+持续学习（Continual Learning，亦称增量学习或终身学习）旨在让模型在数据和任务持续到达的开放场景下不断学习新知识，同时尽可能保持已经获得的旧知识不被破坏~\citep{wang2024survey,mccloskey1989catastrophic,goodfellow2013catastrophic}。该问题与传统静态监督学习的根本差异在于：传统监督学习以一次性获取全部训练样本为前提，而持续学习面对的是不断到来的数据流、持续扩张的任务空间以及通常受限的存储与算力资源~\citep{zhou2024class,zhou2023cil_survey_zh,wang2025llm_cl_zh}。因此，相应的优化目标从“如何拟合当前数据”转变为“如何在不遗忘历史任务的前提下学习新任务”。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.95\textwidth,height=0.45\textheight,keepaspectratio]{images/surveys/wang2024/key_factors.png}
+\caption{持续学习的关键因素分析。(a)(b) 可塑性与稳定性的权衡，二者任一方过强都会损害整体性能；(c)(d) 收敛后的损失景观平坦度以及任务间观测分布的相似度，共同决定了平衡解在整段任务序列上的泛化能力；(e) 参数空间中各阶段共同可行解（黄色区域）的几何结构，随着增量任务数量的增加往往变得更加狭窄与不规则（图源~\citet{wang2024survey}）。}
+\label{fig:ri_key_factors}
+\end{figure}
+
+在医学图像分析、语义分割、时间序列感知与多模态智能体等典型场景中，上述问题尤为突出。一方面，任务集合和类别数目会随时间不断扩展：新型病灶、未见物体、未知活动模式、新引入的任务模块都会持续注入到系统中~\citep{yang2023medmnist,qiao2024tscil,zhai2023investigating,guo2025mcitlib}；另一方面，历史数据往往受到隐私保护、存储成本或跨机构合规等约束，无法长期完整地保留下来~\citep{derakhshani2022lifelonger,sun2023few}。这种“数据持续到达、历史无法回顾”的设定，正是当前各类智能系统在长期部署过程中必须直面的基本约束。
+
+灾难性遗忘（Catastrophic Forgetting）被普遍认为是持续学习中最棘手的核心问题~\citep{mccloskey1989catastrophic,goodfellow2013catastrophic,kirkpatrick2017ewc}。其本质在于，基于梯度反向传播的参数更新只反映当前任务的梯度方向；当某个历史任务的代表梯度与当前梯度方向冲突时，参数更新就会同时抬高旧任务的损失，造成早期任务性能的显著下滑~\citep{lopez2017gradient,chaudhry2019continual,zhai2023investigating}。在医疗诊断、自动驾驶以及部署在用户端的多模态智能体中，这种性能塌缩会直接转化为安全风险与可信性损失，因此提升模型在长期增量过程中的稳定性具有迫切的现实意义~\citep{de2021continual,wang2024survey}。图~\ref{fig:ri_key_factors} 进一步从可塑性与稳定性的权衡、损失景观的平坦度以及参数空间的几何结构等角度，归纳了影响持续学习整体表现的若干关键因素。
+
+
+
+在进一步讨论具体方法之前，先约定本调研所采用的增量学习场景划分。按照综述~\citep{zhou2023cil_survey_zh,wang2024survey,leo2024survey} 的归纳，主流增量学习场景大致可分为三类典型设定：任务增量学习（Task Incremental Learning, Task-IL）在测试阶段提供任务标识符，模型只需在指定任务的子标签空间内做出预测；类别增量学习（Class Incremental Learning, Class-IL）要求模型在不依赖任务标识符的前提下，对所有历史与当前类别做出统一判别，是当下最具挑战也最贴近实际部署的设定；域增量学习（Domain Incremental Learning, Domain-IL）则在标签空间保持不变的条件下，要求模型适应输入分布的持续漂移，例如不同医院、不同采集设备或不同光照条件下的样本~\citep{wang2024survey,zhou2024class}。三者在任务边界是否可见、标签空间是否扩张、输入分布如何变化等维度存在系统差异，构成了当前评测体系的基本坐标系，对比示意如图~\ref{fig:ri_three_il_settings} 所示。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.95\textwidth,height=0.45\textheight,keepaspectratio]{images/surveys/three_il_settings_gpt.png}
+\caption{任务增量、类别增量与域增量三类典型设定的对比示意。Task-IL 在测试阶段提供任务标识符，模型仅在该任务的子标签空间上预测；Class-IL 不提供任务标识符，模型需在累计标签空间上统一判别；Domain-IL 标签空间不变，但输入分布随阶段持续漂移。}
+\label{fig:ri_three_il_settings}
+\end{figure}
+
+为后续讨论建立统一记号，将持续学习过程形式化如下。设任务序列依次到达，共 $T$ 个阶段，第 $t$ 阶段的训练数据记为 $\mathcal{D}_t=\{(\mathbf{x}_i,y_i)\}_{i=1}^{N_t}$，对应任务损失为 $\mathcal{L}_t(\theta;\mathcal{D}_t)$，其中 $\theta$ 为模型参数。理想情形下，第 $t$ 阶段的最优参数应当来自全部历史数据的联合训练目标：
+\begin{equation}
+\theta^{\star}_{\mathrm{joint}}=\mathop{\arg\min}_{\theta}\;\sum_{i=1}^{t}\mathcal{L}_i(\theta;\mathcal{D}_i),
+\label{eq:cl_joint}
+\end{equation}
+其前提是同时访问 $\mathcal{D}_1,\ldots,\mathcal{D}_t$。受存储与隐私约束所限，持续学习场景只允许在仅访问当前阶段数据 $\mathcal{D}_t$ 的条件下顺序更新参数：
+\begin{equation}
+\theta_t=\mathop{\arg\min}_{\theta}\;\mathcal{L}_t(\theta;\mathcal{D}_t),\qquad \theta\leftarrow\theta_{t-1},
+\label{eq:cl_sequential}
+\end{equation}
+其中以上一阶段收敛参数 $\theta_{t-1}$ 作为初始化。式~\eqref{eq:cl_sequential} 的求解轨迹与式~\eqref{eq:cl_joint} 一般不一致，由此引发灾难性遗忘。具体而言，设 $a_{t,i}$ 表示模型在第 $t$ 阶段训练结束后于第 $i$ 个旧任务（$i\le t$）上的测试性能，则任意旧任务 $i$ 的遗忘程度可形式化为
+\begin{equation}
+\Delta_{i\to t}=\max_{\tau\le t}a_{\tau,i}-a_{t,i}\ge 0,\quad i<t,
+\label{eq:forgetting_def}
+\end{equation}
+其中 $\max_{\tau\le t}a_{\tau,i}$ 为模型历史阶段中对任务 $i$ 取得的最佳性能，$\Delta_{i\to t}$ 越大代表遗忘越严重。从优化视角看，上述现象源自新任务梯度 $\nabla_\theta\mathcal{L}_t$ 与旧任务梯度 $\nabla_\theta\mathcal{L}_i$ 的方向冲突：
+\begin{equation}
+\bigl\langle\nabla_\theta\mathcal{L}_t,\,\nabla_\theta\mathcal{L}_i\bigr\rangle<0
+\;\Longrightarrow\;
+\mathcal{L}_i(\theta_t)>\mathcal{L}_i(\theta_{t-1}),\quad i<t,
+\label{eq:grad_conflict}
+\end{equation}
+即两类梯度内积为负时，朝当前梯度方向的参数更新必然会升高某些旧任务损失~\citep{lopez2017gradient,wang2024survey}。式~\eqref{eq:cl_joint}--\eqref{eq:grad_conflict} 构成本章后续讨论各类方法的统一参照系：所有方法本质上都是在仅访问 $\mathcal{D}_t$ 的约束下，对联合训练目标 $\theta^{\star}_{\mathrm{joint}}$ 进行某种形式的近似。
+
+从方法论角度看，持续学习并不是单一路线问题，而是围绕“如何保存旧知识、如何吸收新知识、如何控制模型容量增长”形成了一组相互补充的方法谱系。经典综述通常将现有方法归纳为回放（Replay）、正则化（Regularization）与结构扩展（Architecture-based）三类；随着预训练模型和大语言模型的发展，又进一步出现了以冻结主干、提示学习、Adapter、LoRA 与专家模块为代表的参数高效持续适配路线~\citep{wang2024survey,zhou2024class,wang2025llm_cl_zh}。这几类方法分别从数据、优化、结构与预训练先验四个层面缓解遗忘问题，也对应不同的部署代价和适用条件。
+
+回放与记忆类方法试图在增量阶段重新呈现旧数据分布，是目前效果较稳定、工程中使用较多的一类方案。其基本形式是在记忆缓冲区中保存少量历史样本，并与当前任务样本混合训练；iCaRL 利用类别原型和样本选择维持旧类表征，Experience Replay 与 DER 则通过历史样本及其暗知识输出抑制表示漂移~\citep{rebuffi2017icarl,rolnick2019experience,buzzega2020dark}。进一步的工作还包括基于梯度约束的 GEM、基于样本价值或强化策略的记忆管理，以及利用生成模型合成旧任务样本的生成式回放~\citep{lopez2017gradient,chaudhry2019continual,isele2018selective,ASER,shin2017continual,gao2023ddgr}。这类方法的优势在于能够直接补偿旧分布信息，缺点则是对缓存规模、样本选择策略和隐私合规高度敏感，其典型机制如图~\ref{fig:ri_replay} 所示。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.95\textwidth,height=0.4\textheight,keepaspectratio]{images/surveys/wang2024/replay_methods.png}
+\caption{基于回放（Replay-based）的持续学习方法示意。其核心思想是近似并恢复旧数据分布，典型子方向包括：经验回放（在记忆缓冲区中保存少量旧训练样本）、生成式回放（训练生成模型以合成旧样本）以及特征回放（通过保存原型、统计信息或训练特征生成模型恢复旧特征分布）（图源~\citet{wang2024survey}）。}
+\label{fig:ri_replay}
+\end{figure}
+
+正则化与知识蒸馏类方法不直接保存原始样本，而是在优化目标中加入额外约束，限制新任务训练对旧知识的破坏。参数正则化代表方法包括 EWC、SI 与 MAS，它们分别利用 Fisher 信息、参数重要性累积或输出敏感性来约束关键参数的更新~\citep{kirkpatrick2017ewc,zenke2017continual,aljundi2018memory}；函数正则化与知识蒸馏方法则以 LwF、PODNet 等为代表，通过保持旧模型输出分布、中间特征或分类器响应的一致性来维持旧类判别能力~\citep{li2017learning,Douillard_Cord_Ollion_Robert_Valle_2020}。在类别增量学习中，统一分类器重平衡、校准与边界修正也被广泛用于缓解新旧类别得分偏置~\citep{hou2019learning,zhu2021calibration,zhu2023imitating}。这类方法存储开销较小，但对任务相似度、正则强度和蒸馏温度等超参数较为敏感，其常见形式可参见图~\ref{fig:ri_regularization}。
+
+结构扩展与参数隔离类方法通过为不同任务分配不同的参数子空间来减少相互干扰。Progressive Neural Networks 为新任务追加网络分支并通过横向连接迁移旧知识，Piggyback、PackNet 与 HAT 等方法则通过权重掩码、剪枝或注意力门控在共享主干内隔离任务特定参数~\citep{rusu2016progressive,mallya2018piggyback,Mallya_Lazebnik_2018,serra2018hat}。专家网络和动态结构方法进一步把任务选择显式建模为路由问题，例如 Expert Gate 使用专家集合处理不同任务，DyTox 通过动态 token 扩展适配持续到达的新类别~\citep{aljundi2017expert,Douillard_Rame_Couairon_Cord_2022}。该类方法通常具有较强的稳定性，但参数量、路由复杂度和任务标识依赖会随任务数增长而逐渐成为系统负担，其代表性架构如图~\ref{fig:ri_architecture} 所示。
+
+在预训练模型时代，持续学习的关注点从“全模型逐阶段训练”逐渐转向“冻结强表征主干并轻量更新少量适配参数”。Adapter、LoRA 与 Prompt Tuning 通过只训练小规模适配模块或提示向量降低更新成本，并减少对预训练知识的破坏~\citep{houlsby2019parameter,hu2021lora,jia2022visual}；DualPrompt、S-Prompt 与 CODA-Prompt 等工作进一步把提示池设计为可检索、可组合的任务记忆，使预训练视觉 Transformer 能在无回放或弱回放条件下保持旧任务能力~\citep{wang2022dualprompt,wang2022s,smith2023coda}。面向大语言模型与多模态大模型，LoRA 专家、正交子空间和 MoE 结构也被用于隔离领域知识与缓解持续指令微调中的遗忘~\citep{wang2023orthogonal,chen2024coin,wang2024trace}。这一路线显著降低了增量更新成本，但也引入了提示选择、专家路由和开放式生成评测等新的问题。
+
+
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.95\textwidth,height=0.4\textheight,keepaspectratio]{images/surveys/wang2024/regularization_methods.png}
+\caption{基于正则化（Regularization-based）的持续学习方法示意。其核心思想是通过加入显式正则化项，模拟旧模型的参数（权重正则化）或行为（函数正则化），从而在不依赖历史样本的前提下抑制旧知识被覆盖（图源~\citet{wang2024survey}）。}
+\label{fig:ri_regularization}
+\end{figure}
+
+
+
+针对上述瓶颈，近年来出现了一条新的研究路线，即基于闭式解（Closed-form Solution）的解析持续学习~\citep{zhuang2022acil,zhuang2024dsal,fang2024air,GKEAL_Zhuang_CVPR2023,GACL_Zhuang_NeurIPS2024}。其基本思想是在冻结主干编码器之后，将增量阶段的分类头训练重新表述为带正则项的最小二乘问题，并通过维护自相关与互相关统计量的递推更新，从解析角度获得与联合训练一致的最优解。这条路线天然规避了多轮反向传播带来的旧任务梯度冲突，同时不依赖原始历史样本回放，因此在隐私敏感、算力受限和长期部署场景下展现出独特优势~\citep{ZHUANG2024107285,he2024realrepresentationenhancedanalytic}。
+
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.95\textwidth,height=0.45\textheight,keepaspectratio]{images/surveys/wang2024/architecture_methods.png}
+\caption{基于结构扩展（Architecture-based）的持续学习方法示意。该方向通过精心设计的架构构建任务特定或任务自适应参数，典型形式包括：参数分配（为每个任务分配专用参数）、模块化网络（构建任务自适应子模块或子网络）以及模型分解（参数层面的低秩分解与表示层面的特征掩码两类）（图源~\citet{wang2024survey}）。}
+\label{fig:ri_architecture}
+\end{figure}
+
+从工程部署角度看，长期运行的持续学习系统通常需要同时满足以下四类约束：
+\begin{itemize}
+    \item \textbf{数据约束}：历史样本不能长期保留或不能跨机构流动，例如医学影像受 HIPAA、GDPR 等法规约束，临床多中心协作场景下原始图像很难离开本地机构~\citep{yang2023medmnist,derakhshani2022lifelonger}；
+    \item \textbf{算力约束}：增量阶段应尽量避免多轮反向传播，尤其是在嵌入式终端、机器人控制器与受限服务器场景下，单次更新的计算预算被严格压缩~\citep{de2021continual,GKEAL_Zhuang_CVPR2023}；
+    \item \textbf{稳定性约束}：旧任务性能下降应可控，且不应出现“训练新任务一两轮即把旧任务击穿”的雪崩式遗忘~\citep{goodfellow2013catastrophic,wang2024survey}；
+    \item \textbf{扩展性约束}：新增任务应能快速接入并复用既有能力，避免每次任务到来都重新训练全模型~\citep{rusu2016progressive,wang2022dualprompt}。
+\end{itemize}
+
+本课题拟研究的闭式解持续学习方法在机制上与上述四类约束高度匹配：核心更新对象是自相关与互相关统计量及对应的解析分类头，而非整网参数反复梯度优化，因此在隐私、效率与长期维护三方面具有明显潜在优势~\citep{zhuang2022acil,fang2024air}。
+综合而言，本课题选题具有以下三方面意义：第一，在理论上，对“梯度更新是不是持续学习的唯一可行路径”这一基础问题提供新的反例与回答；第二，在算法上，将分类、分割、路由等异构任务统一到同一套递归闭式解框架之下，避免不同任务被各自孤立地处理；第三，在应用上，针对医学影像、时间序列、语义分割与多模态大语言模型专家路由四类代表性问题，构建出可在隐私敏感、算力受限场景下长期运行的实用方法体系~\citep{li2026aidc,li2025tsacl,li2025cfsseg,li2026cfrouter}。
+
+\section{国内外研究现状}
+
+\subsection{持续学习基础研究}
+
+持续学习的研究历史可上溯至上世纪八九十年代关于神经网络灾难性遗忘的早期工作~\citep{mccloskey1989catastrophic,goodfellow2013catastrophic}。近十年随着深度学习的普及，相关研究重新进入活跃期，并逐渐形成了较为系统的方法学脉络~\citep{wang2024survey,zhou2024class,zhou2023cil_survey_zh,wang2025llm_cl_zh,leo2024survey}。在 §1.1 已对 Task-IL、Class-IL 与 Domain-IL 三类典型设定（图~\ref{fig:ri_three_il_settings}）作出统一约定的基础上，下文进一步从评测协议、主要方法谱系与典型任务场景三方面回顾相关进展。
+
+\subsubsection{评测协议与问题设置}
+
+为客观刻画方法在长序列阶段下的综合表现，社区逐步收敛于一组通用的评测指标：以全部阶段结束后在历史任务集合上的平均准确率（Average Accuracy, AA）刻画整体性能，以遗忘度量（Forgetting Measure, FM）量化历史任务峰值精度相较终态精度的下滑幅度~\citep{chaudhry2019continual}；进一步地，反向迁移（Backward Transfer, BWT）与前向迁移（Forward Transfer, FWT）分别度量新任务学习对旧任务性能的影响与历史经验对新任务学习的辅助效应~\citep{lopez2017gradient,leo2024survey}。在面向产业落地的场景中，单阶段训练时间、峰值显存占用、参数与缓存增量等系统级指标也越来越受到关注~\citep{de2021continual,wang2024survey}。
+
+形式化地，设第 $i$ 个任务（$i=1,\ldots,T$）在第 $j$ 阶段训练结束后的测试精度为 $a_{j,i}$，则上述四类指标可统一定义如下。全部 $T$ 阶段结束后的平均准确率为
+\begin{equation}
+\mathrm{AA}=\frac{1}{T}\sum_{i=1}^{T}a_{T,i},
+\label{eq:metric_aa}
+\end{equation}
+该指标衡量模型在历史任务集合上的综合表现，是当前主流基准最核心的报告量。遗忘度量则量化旧任务峰值精度相较最终精度的下滑幅度：
+\begin{equation}
+\mathrm{FM}=\frac{1}{T-1}\sum_{i=1}^{T-1}\Bigl(\max_{\tau\in\{i,\ldots,T-1\}}a_{\tau,i}-a_{T,i}\Bigr),
+\label{eq:metric_fm}
+\end{equation}
+$\mathrm{FM}$ 值越小代表稳定性越好，理想方法应在保持 $\mathrm{AA}$ 不退化的前提下尽可能压低 $\mathrm{FM}$。反向迁移度量平均刻画新任务训练对旧任务的影响：
+\begin{equation}
+\mathrm{BWT}=\frac{1}{T-1}\sum_{i=1}^{T-1}\bigl(a_{T,i}-a_{i,i}\bigr),
+\label{eq:metric_bwt}
+\end{equation}
+$\mathrm{BWT}>0$ 表明历史任务通过新任务训练获得了正向增强（亦称正向反向迁移），反之则为负向干扰。前向迁移度量则衡量历史经验对未见任务初始性能的贡献：
+\begin{equation}
+\mathrm{FWT}=\frac{1}{T-1}\sum_{i=2}^{T}\bigl(a_{i-1,i}-\tilde{a}_i\bigr),
+\label{eq:metric_fwt}
+\end{equation}
+其中 $\tilde{a}_i$ 为仅以随机初始化在任务 $i$ 上训练所得到的参考精度。式~\eqref{eq:metric_aa}--\eqref{eq:metric_fwt} 构成现行评测协议的核心坐标系，本调研后续章节亦沿用上述记号。
+
+不同问题设置对方法选择具有直接影响。Task-IL 场景中任务标识可见，结构隔离与任务特定参数往往能取得较好效果；Class-IL 场景要求模型在统一标签空间中区分所有已见类别，因此更依赖类别边界保持、分类器校准与旧类得分修正；Domain-IL 场景标签空间不变但输入分布持续漂移，方法重点则从类别扩展转向表征稳健性与域自适应能力~\citep{zhou2024class,wang2024survey}。因此，持续学习方法的优劣不能脱离具体协议讨论：同一算法在 Task-IL 中可能表现稳定，但在 Class-IL 中会因类别混淆和任务边界不可见而显著退化。
+
+\subsubsection{回放与记忆类方法}
+
+回放类方法的核心思想是用有限记忆近似历史数据分布。iCaRL 将样本缓存、类别均值原型与知识蒸馏结合起来，是早期类别增量学习的代表性框架~\citep{rebuffi2017icarl}；Experience Replay 在每次新任务训练时混入历史样本，DER 则进一步保存旧模型 logits，以暗知识约束当前模型输出~\citep{rolnick2019experience,buzzega2020dark}。GEM 等梯度约束方法把记忆样本用于构造旧任务梯度约束，使新任务更新不显著损害旧任务目标~\citep{lopez2017gradient,chaudhry2019continual}。在记忆选择方面，Selective Replay、ASER 等方法尝试根据样本代表性、决策边界价值或 Shapley 近似评估样本重要性，以提高小缓存条件下的利用效率~\citep{isele2018selective,ASER}。
+
+生成式回放则用生成模型替代真实样本缓存，通过 GAN、VAE 或扩散模型生成旧任务样本，再与当前数据联合训练~\citep{shin2017continual,goodfellow2014generative,kingma2013auto,gao2023ddgr}。这一路线在隐私保护和存储压缩方面具有吸引力，但生成质量、类别覆盖度与训练稳定性会直接影响最终效果。总体而言，回放方法通常具有较强的经验性能，但其代价是需要保存原始样本、特征、logits 或生成器；在医疗、多中心协作和用户端智能体等场景中，数据合规与缓存增长往往成为主要障碍。
+
+从损失函数的角度，上述方法可统一表述为在当前任务损失之上引入与记忆缓存 $\mathcal{M}_{t-1}$ 相关的附加项。经验回放（ER）直接将记忆样本与当前样本联合训练：
+\begin{equation}
+\mathcal{L}_{\mathrm{ER}}=\mathbb{E}_{(\mathbf{x},y)\sim\mathcal{D}_t}\ell\bigl(f_\theta(\mathbf{x}),y\bigr)+\lambda\,\mathbb{E}_{(\mathbf{x}',y')\sim\mathcal{M}_{t-1}}\ell\bigl(f_\theta(\mathbf{x}'),y'\bigr),
+\label{eq:replay_er}
+\end{equation}
+其中 $\ell(\cdot,\cdot)$ 为分类损失，$\lambda>0$ 控制记忆样本相对权重。DER 在此基础上额外保存旧模型在记忆样本上的 logits $\mathbf{z}'$，以暗知识形式约束当前模型输出：
+\begin{equation}
+\mathcal{L}_{\mathrm{DER}}=\mathcal{L}_{\mathrm{ER}}+\beta\,\mathbb{E}_{(\mathbf{x}',\mathbf{z}')\sim\mathcal{M}_{t-1}}\bigl\|f_\theta(\mathbf{x}')-\mathbf{z}'\bigr\|_2^2,
+\label{eq:replay_der}
+\end{equation}
+其中 $\beta>0$ 平衡硬标签与软标签项，能够在不增加额外样本的前提下提供更稠密的旧知识监督。GEM 类方法则把记忆样本用于构造梯度方向约束，将当前梯度投影至不增加旧任务损失的可行半空间：
+\begin{equation}
+\mathbf{g}^{\star}=\mathop{\arg\min}_{\mathbf{g}}\;\tfrac{1}{2}\bigl\|\mathbf{g}-\nabla_\theta\mathcal{L}_t\bigr\|_2^2\quad\text{s.t.}\quad \bigl\langle\mathbf{g},\,\nabla_\theta\mathcal{L}_i(\mathcal{M}_{t-1})\bigr\rangle\ge 0,\;\forall i<t,
+\label{eq:gem}
+\end{equation}
+$\mathbf{g}^{\star}$ 用于替代原始梯度进行参数更新，从而在更新方向上保证旧任务损失非增。生成式回放则训练条件生成器 $G_\phi$ 合成旧任务样本，对应损失为
+\begin{equation}
+\mathcal{L}_{\mathrm{GR}}=\mathbb{E}_{(\mathbf{x},y)\sim\mathcal{D}_t}\ell\bigl(f_\theta(\mathbf{x}),y\bigr)+\lambda\,\mathbb{E}_{y\sim p_{<t}(y),\,\tilde{\mathbf{x}}\sim G_\phi(\cdot|y)}\ell\bigl(f_\theta(\tilde{\mathbf{x}}),y\bigr),
+\label{eq:replay_gr}
+\end{equation}
+其中 $p_{<t}(y)$ 为历史类别先验，$G_\phi$ 自身亦需在阶段间持续更新。式~\eqref{eq:replay_er}--\eqref{eq:replay_gr} 共同刻画了回放类方法在“样本—暗知识—梯度—生成分布”四个层面对历史信息的近似方式。
+
+\subsubsection{正则化与知识蒸馏方法}
+
+正则化方法试图用显式约束代替历史样本访问。EWC 利用 Fisher 信息矩阵估计参数重要性，在新任务训练中惩罚重要参数偏移；SI 在训练轨迹中累计参数贡献度，MAS 则根据输出函数对参数的敏感性衡量旧知识依赖~\citep{kirkpatrick2017ewc,zenke2017continual,aljundi2018memory}。这类方法的共同特点是常驻存储较小、实现相对直接，但参数重要性的估计通常是局部近似，当任务差异较大或阶段数持续增长时，单纯的参数约束难以覆盖复杂的函数变化。
+
+知识蒸馏方法从函数空间保持旧模型行为。LwF 在不访问旧数据的情况下使用旧模型输出作为软标签，约束新模型对旧类别的响应~\citep{li2017learning}；PODNet 等方法进一步蒸馏中间层特征或 pooled 特征响应，以减少表示层面的漂移~\citep{Douillard_Cord_Ollion_Robert_Valle_2020}。在类别增量学习中，由于新类别训练样本更频繁地参与优化，分类器输出常出现新类偏置，因此 EEIL、统一分类器重平衡、校准方法和边界修正策略被用于恢复新旧类别之间的比较公平性~\citep{castro2018end,hou2019learning,zhu2021calibration,zhu2023imitating}。这说明正则化与蒸馏并非单独解决遗忘的万能手段，往往需要与分类器校准、样本选择或结构设计结合。
+
+形式上述各类方法可统一为在当前任务损失基础上加入与旧模型相关的正则项。EWC 利用 Fisher 信息矩阵估计参数重要性，并以加权 $\ell_2$ 形式约束参数偏移：
+\begin{equation}
+\mathcal{L}_{\mathrm{EWC}}=\mathcal{L}_t(\theta)+\frac{\lambda}{2}\sum_{k}F_{t-1,k}\bigl(\theta_k-\theta_{t-1,k}\bigr)^2,
+\label{eq:reg_ewc}
+\end{equation}
+其中 $F_{t-1,k}$ 衡量第 $k$ 个参数 $\theta_k$ 在旧任务上的重要性，$\theta_{t-1,k}$ 为上一阶段收敛值。SI 与 MAS 将 $F_{t-1,k}$ 替换为参数贡献度累积或输出敏感性度量：
+\begin{equation}
+\Omega_k^{\mathrm{SI}}=\sum_{i<t}\frac{(\Delta_i\theta_k)\cdot g_{i,k}}{(\Delta_i\theta_k)^2+\xi},\qquad
+\Omega_k^{\mathrm{MAS}}=\mathbb{E}_{\mathbf{x}\sim\mathcal{D}_{<t}}\Bigl|\partial_{\theta_k}\bigl\|f_{\theta_{t-1}}(\mathbf{x})\bigr\|_2^2\Bigr|,
+\label{eq:reg_si_mas}
+\end{equation}
+其中 $\Delta_i\theta_k$ 与 $g_{i,k}$ 分别表示阶段 $i$ 内的参数轨迹增量与梯度，$\xi$ 为数值稳定项；将式~\eqref{eq:reg_ewc} 中 $F_{t-1,k}$ 替换为对应 $\Omega_k$ 即得相应正则形式。LwF 则从函数空间约束新旧模型输出分布的一致性，采用带温度 $\tau$ 的 KL 散度蒸馏：
+\begin{equation}
+\mathcal{L}_{\mathrm{LwF}}=\mathcal{L}_t(\theta)+\alpha\,\mathbb{E}_{\mathbf{x}\sim\mathcal{D}_t}\,\mathrm{KL}\!\Bigl(\sigma_\tau\bigl(f_{\theta_{t-1}}(\mathbf{x})\bigr)\,\bigl\|\,\sigma_\tau\bigl(f_\theta(\mathbf{x})\bigr)\Bigr),
+\label{eq:reg_lwf}
+\end{equation}
+其中 $\sigma_\tau(\mathbf{z})_k=\exp(z_k/\tau)/\sum_j\exp(z_j/\tau)$ 为带温度的 softmax，$\alpha$ 控制蒸馏强度。PODNet 进一步将蒸馏对象扩展至中间层 pooled 特征：
+\begin{equation}
+\mathcal{L}_{\mathrm{PODNet}}=\mathcal{L}_t(\theta)+\sum_{l\in\mathcal{S}}\lambda_l\,\mathbb{E}_{\mathbf{x}\sim\mathcal{D}_t}\bigl\|\mathcal{P}\bigl(h^{(l)}_{\theta_{t-1}}(\mathbf{x})\bigr)-\mathcal{P}\bigl(h^{(l)}_\theta(\mathbf{x})\bigr)\bigr\|_2^2,
+\label{eq:reg_podnet}
+\end{equation}
+其中 $h^{(l)}$ 为第 $l$ 层特征图，$\mathcal{P}(\cdot)$ 表示空间维度上的池化算子，$\mathcal{S}$ 为参与蒸馏的层集合。式~\eqref{eq:reg_ewc}--\eqref{eq:reg_podnet} 表明，无论参数空间正则还是函数空间蒸馏，本质都是在当前任务损失之外引入若干基于旧参数 $\theta_{t-1}$ 或旧模型输出 $f_{\theta_{t-1}}$ 的附加约束，差别仅在度量对象与作用层级。
+
+\subsubsection{结构扩展与参数隔离方法}
+
+结构扩展方法从模型容量角度处理稳定性与可塑性的矛盾。Progressive Neural Networks 为每个新任务增加分支，并通过横向连接复用旧任务表征，从结构上避免旧参数被覆盖~\citep{rusu2016progressive}。Piggyback、PackNet 与 HAT 等方法在共享主干上学习任务掩码、剪枝分配或注意力门控，使不同任务在参数空间中占据相对隔离的子区域~\citep{mallya2018piggyback,Mallya_Lazebnik_2018,serra2018hat}。专家网络则显式维护多个任务专家，并通过门控或路由模块选择合适专家处理输入~\citep{aljundi2017expert}。
+
+近年来，结构扩展思想也被引入 Transformer 与大模型场景。DyTox 通过动态 token 扩展来表示任务相关信息，Prompt 与专家模块则把“新增能力”封装为可追加、可选择的小型组件~\citep{Douillard_Rame_Couairon_Cord_2022,wang2022dualprompt,chen2024coin}。这类方法在任务边界明确或专家路由可靠时表现较好，但当任务标识不可见、输入分布交叠或任务数量持续增长时，模型需要解决参数规模线性增长、任务路由错误以及专家碎片化等问题。
+
+\subsubsection{预训练模型驱动的持续适配方法}
+
+大规模预训练模型改变了持续学习的基本假设：模型不再总是从零开始学习，而是在强表征主干基础上进行小规模、阶段式适配。Adapter 和 LoRA 将更新限制在低维瓶颈或低秩矩阵中，Prompt Tuning 与 Visual Prompt Tuning 则通过可学习提示向量调节冻结模型行为~\citep{houlsby2019parameter,hu2021lora,jia2022visual}。在视觉持续学习中，DualPrompt、S-Prompt 与 CODA-Prompt 等工作把提示池作为可检索的任务记忆，使模型根据输入选择合适提示，从而在不大幅修改主干参数的前提下适应新任务~\citep{wang2022dualprompt,wang2022s,smith2023coda}。
+
+为更清晰地刻画上述参数高效适配机制，下面给出三类代表性更新规则的形式化定义。LoRA 将权重增量约束为低秩分解，从而以极少新增参数完成阶段间适配：
+\begin{equation}
+\mathbf{W}=\mathbf{W}_0+\Delta\mathbf{W},\qquad \Delta\mathbf{W}=\mathbf{B}\mathbf{A},\;\;\mathbf{B}\in\mathbb{R}^{d\times r},\;\mathbf{A}\in\mathbb{R}^{r\times d},\;r\ll d,
+\label{eq:peft_lora}
+\end{equation}
+其中 $\mathbf{W}_0$ 为冻结主干权重，增量训练仅更新低秩因子 $\mathbf{A},\mathbf{B}$。Adapter 则在 Transformer 子层内部嵌入瓶颈结构：
+\begin{equation}
+\mathrm{Adapter}(\mathbf{h})=\mathbf{h}+\mathbf{W}_{\mathrm{up}}\,\rho\bigl(\mathbf{W}_{\mathrm{down}}\mathbf{h}\bigr),\qquad \mathbf{W}_{\mathrm{down}}\in\mathbb{R}^{r\times d},\;\mathbf{W}_{\mathrm{up}}\in\mathbb{R}^{d\times r},
+\label{eq:peft_adapter}
+\end{equation}
+其中 $\rho(\cdot)$ 为非线性激活，残差结构保证初始化时近似恒等映射，从而在不破坏预训练表征的前提下逐步引入任务相关变换。Prompt Tuning 在输入序列前拼接 $L$ 个可学习的提示向量 $\mathbf{P}=[\mathbf{p}_1,\ldots,\mathbf{p}_L]\in\mathbb{R}^{L\times d}$：
+\begin{equation}
+\tilde{\mathbf{X}}=[\mathbf{P};\mathbf{X}],\qquad \hat{\mathbf{y}}=f_{\theta_0}\bigl(\tilde{\mathbf{X}}\bigr),
+\label{eq:peft_prompt}
+\end{equation}
+其中 $f_{\theta_0}$ 为冻结主干，仅 $\mathbf{P}$ 参与梯度更新，从而把整体任务适配压缩至 $L\!\cdot\!d$ 维提示子空间。在持续学习场景中，DualPrompt 与 CODA-Prompt 等方法进一步将提示集合扩展为可检索的提示池 $\{(\mathbf{k}_j,\mathbf{P}_j)\}_{j=1}^{M}$，并根据输入特征与键向量的相似度选取 Top-$K$ 提示组合：
+\begin{equation}
+\mathbf{P}^{\star}=\bigoplus_{j\in\mathcal{J}}\mathbf{P}_j,\qquad
+\mathcal{J}=\mathop{\mathrm{Top}\text{-}K}_{j\in\{1,\ldots,M\}}\bigl\langle q\bigl(f_{\theta_0}(\mathbf{X})\bigr),\,\mathbf{k}_j\bigr\rangle,
+\label{eq:peft_prompt_pool}
+\end{equation}
+其中 $q(\cdot)$ 为查询投影，$\oplus$ 表示提示拼接，$\mathcal{J}$ 为选中的 $K$ 个提示索引集合。式~\eqref{eq:peft_lora}--\eqref{eq:peft_prompt_pool} 把“新任务能力”封装为可追加、可路由的紧凑模块，从而以非破坏性方式实现持续适配，是当前预训练模型时代持续学习的主流参数高效路线。
+
+面向大语言模型和多模态大模型，持续学习进一步转化为持续预训练、持续指令微调、领域专家适配和外部记忆管理等问题~\citep{cossu2024continual,shi2024llmcontinual,wang2025llm_cl_zh}。这一方向的优势在于增量更新成本低、可复用预训练知识强，但遗忘形态也更复杂：模型可能不只忘记类别边界，还会损失通用对话、推理、安全对齐、风格一致性或跨模态对齐能力~\citep{wang2024trace}。因此，预训练模型时代的持续学习需要同时关注参数高效性、能力保持、任务路由和开放式评测协议。
+
+\subsubsection{典型任务场景进展}
+
+在视觉领域，类别增量学习与语义分割持续学习是两条主要的发展线索。类别增量学习以 iCaRL 为里程碑，后续围绕样本选择、知识蒸馏、分类器校准与边界保护提出了一系列改进方案~\citep{rebuffi2017icarl,castro2018end,hou2019learning}；语义分割方向在 MiB、PLOP 等工作的基础上，进一步关注背景类别漂移、像素级知识蒸馏与伪标签生成等问题~\citep{cermelli2020mib,douillard2021plop}。在医学影像方向，针对疾病分类与亚型识别的增量场景，已经出现 LifeLonger 等基准与方法~\citep{yang2023medmnist,derakhshani2022lifelonger,sun2023few}，强调数据隐私与跨中心部署的特殊约束。
+
+在时序场景，时间序列持续分类近两年成为关注热点，TSCIL 基准系统性地比较了回放、正则化与结构扩展三类方法在多变量传感器数据上的表现~\citep{qiao2024tscil,qiao2023dt2w,huo2025continue}，指出在类内方差大、采样率不一致的真实场景下，仅依赖有限回放难以兼顾稳定性与可塑性。综合来看，现有方法学对“何时回放、回放多少、如何衡量重要性、如何限制参数增长、如何利用预训练先验”等核心问题给出了多种取舍，但在严格无回放、长序列、多模态和隐私敏感约束同时存在时仍存在明显短板~\citep{wang2024survey,zhou2023cil_survey_zh}。
+
+\subsection{闭式解持续学习进展}
+
+在上述回放、正则化、蒸馏、结构扩展与参数高效适配方法之外，近年来也有研究开始探索基于闭式解的解析持续学习路线~\citep{zhuang2022acil,zhuang2024dsal,fang2024air,GKEAL_Zhuang_CVPR2023,GACL_Zhuang_NeurIPS2024,ZHUANG2024107285,he2024realrepresentationenhancedanalytic}。这一路线并不取代前述方法谱系，而是从“增量阶段是否必须依赖多轮梯度反向传播”这一角度提供补充思路：在冻结主干或固定特征表示的条件下，将分类头更新转化为带正则项的最小二乘问题，并通过递推统计量近似或恢复联合训练解。
+
+相较于回放方法，闭式解路线更强调用紧凑统计量替代历史样本；相较于正则化与蒸馏方法，它尝试直接求解一个明确的解析目标；相较于结构扩展方法，它通常不需要为每个任务无限追加大规模参数。因此，该路线与隐私敏感、算力受限和长期部署场景具有较强契合性。不过，国内外已有工作仍主要集中在特定分类设置或局部任务形态上，存在“理论统一性不足、模块化实现分散、跨任务评测尚不完整”等问题。基于此，后续章节将把闭式解作为本课题拟深入研究的技术路线，而第一章的现状分析仍以持续学习整体方法体系为背景展开。
+
+\subsection{预训练模型与大语言模型时代的持续学习}
+
+预训练模型规模与可获得性的快速提升，使持续学习的研究范式发生了显著迁移。早期工作普遍以“从零训练—逐阶段更新”为基本设定，而当前主流路线则倾向于在大规模预训练编码器或大语言模型基础上，仅对小规模适配模块或外挂分类头进行增量更新~\citep{wang2022dualprompt,hu2021lora,wang2023orthogonal,chen2024coin}。该范式的内在动因有三：其一，预训练模型本身已具备强迁移能力，编码器在多数下游任务上保持冻结即可获得有竞争力的表征，从而显著降低了灾难性遗忘的发生面~\citep{cossu2024continual,chee2023leveraging}；其二，参数高效微调技术（如 LoRA、Prompt Tuning、Adapter 等）只需更新百分之一甚至千分之一量级的参数，与持续学习对“单阶段轻量更新”的诉求天然契合~\citep{hu2021lora,wang2022dualprompt}；其三，外挂式分类头或专家模块便于按阶段拼装与替换，为长期演化中的能力扩展提供了模块化抓手~\citep{chen2024coin,wang2023orthogonal}。
+
+在面向大语言模型的持续指令微调与领域适配场景中，灾难性遗忘的表现形式相较视觉持续学习更为复杂。一方面，新任务上的指令微调常常引起模型在通用对话、推理、安全对齐等历史能力上的明显塌缩，已被多项实证研究系统报道~\citep{luo2023empirical,shi2024llmcontinual,wang2024trace}；另一方面，由于大语言模型的输出空间为开放生成而非闭集分类，传统基于平均准确率与遗忘度量的评测协议需要扩展为多维度的能力评估（如指令跟随、知识保留、安全性、风格一致性等）~\citep{wang2025llm_cl_zh,wang2024trace}。围绕这一问题，社区一方面探索面向 LLM 的轻量回放策略与参数级编辑方法，例如 WISE 等通过可控的局部参数写入机制实现新知识注入~\citep{wang2024wise}；另一方面则尝试结合检索增强与外部记忆，使新增知识以非参数化方式驻留于检索库而非主干参数中~\citep{packer2023memgpt,chhikara2025mem0,xu2025amem}。
+
+
+\subsection{智能体记忆}
+
+近两年来，伴随大语言模型从“一次性对话补全”走向“长期运行的智能体”，关于智能体记忆（Agent Memory）的研究迅速兴起，并与持续学习产生了显著的交集~\citep{xi2023rise,wang2024llmagent,sumers2024coala}。
+
+从认知架构视角看，CoALA 框架将语言智能体的记忆划分为工作记忆、长期记忆（情景、语义、过程）三层，并强调长期记忆模块的可写、可检索与可演化（如图~\ref{fig:ri_coala} 所示）~\citep{sumers2024coala}。Generative Agents 通过“记忆流（memory stream）+ 反思 + 计划”的三段式架构，让二十多个虚拟角色在两天模拟过程中维持连贯的人格与行为~\citep{park2023generative}。MemGPT 进一步把上下文窗口类比为操作系统的主存，把外部存储类比为磁盘，赋予智能体自主管理多级记忆的能力~\citep{packer2023memgpt}。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.95\textwidth,height=0.45\textheight,keepaspectratio]{images/surveys/coala_architecture.png}
+\caption{CoALA 语言智能体认知架构示意。(A) CoALA 定义了一组相互作用的模块与流程：决策流程执行智能体的源代码，包含三类程序——与大语言模型交互（提示模板与解析器）、内部记忆处理（对程序记忆、语义记忆、情景记忆的检索与学习）以及外部环境交互（对话、物理与数字世界）；(B) 从时间维度看，决策流程与外部环境循环执行决策周期，在每个周期内通过信息检索与推理进行规划，提出并评估候选行为，随后选取并执行最优行为，完成观测后开启新一轮循环（图源~\citet{sumers2024coala}）。}
+\label{fig:ri_coala}
+\end{figure}
+
+在上述认知架构与操作系统类比的基础上，面向生产环境的智能体记忆系统进一步把"如何提取、如何更新"做成可执行的算法管线。Mem0 将记忆操作显式分解为提取阶段与更新阶段：提取阶段以最近若干轮对话与会话摘要为输入，由大语言模型抽取候选记忆条目；更新阶段则检索 Top-$s$ 相似旧记忆，并由模型自主决定对每条新记忆执行 ADD、UPDATE、DELETE 或 NOOP 操作，从而在长程交互中维持紧凑且无冗余的记忆库（如图~\ref{fig:ri_mem0} 所示）~\citep{chhikara2025mem0}。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.95\textwidth,height=0.4\textheight,keepaspectratio]{images/surveys/mem0_architecture.png}
+\caption{Mem0 系统的架构概览。提取阶段（Extraction Phase）以会话摘要与最近 $m$ 轮消息为输入，由大语言模型抽取新的候选记忆条目；更新阶段（Update Phase）则检索 Top-$s$ 条相似旧记忆，并由模型自主决定对每条新条目执行 ADD、UPDATE、DELETE 或 NOOP 操作，最终写回记忆数据库（图源~\citet{chhikara2025mem0}）。}
+\label{fig:ri_mem0}
+\end{figure}
+
+与 Mem0 以扁平记忆条目为基本单元不同，A-MEM 借鉴卡片盒笔记法（Zettelkasten）的思想，将每条交互记忆封装为带有时间戳、上下文、关键词、标签与嵌入向量的"笔记"，并在写入时通过 Top-$k$ 检索建立笔记之间的语义链接；新记忆到达后还会反向触发既有笔记的"演化"——由大语言模型重新审视相关笔记并更新其标签与链接结构，从而构造可持续生长的互联记忆图（如图~\ref{fig:ri_amem} 所示）~\citep{xu2025amem}。
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.95\textwidth,height=0.4\textheight,keepaspectratio]{images/surveys/amem_architecture.png}
+\caption{A-MEM 智能体记忆架构示意。系统由四个阶段组成：笔记构建（Note Construction）将每次交互处理为带有时间戳、上下文、关键词、标签与嵌入的笔记；链接生成（Link Generation）通过 Top-$k$ 检索建立笔记之间的语义关联；记忆演化（Memory Evolution）由大语言模型在新笔记写入时反向更新相关旧笔记的属性；记忆检索（Memory Retrieval）则将用户查询编码后从笔记图中召回相关条目供下游智能体使用（图源~\citet{xu2025amem}）。}
+\label{fig:ri_amem}
+\end{figure}
+
+上述工作虽然多以“工程组件”形式呈现，但其本质上要解决的与持续学习是同一类问题：在数据持续涌入的过程中，如何决定保留什么、丢弃什么，如何让有限的存储空间承载尽可能多的可用知识，以及如何避免新知识淹没旧知识。
+
+值得注意的是，主流智能体记忆系统普遍依赖向量检索 + 上下文拼接的非参数化路径，这一选择固然降低了系统耦合度，但也带来了上下文成本随交互轮数线性增长、检索噪声放大、隐私数据长期驻留外部存储等新问题~\citep{packer2023memgpt,chhikara2025mem0}。
+
+\subsection{自进化智能体}
+
+与“被动接受新数据”的传统持续学习不同，自进化智能体（Self-Evolving Agent）强调主动收集经验、反思失败、抽取技能并将其纳入可复用的能力库，从而在长期交互中实现能力的持续累积~\citep{fan2025selfevolving,gao2025selfevolving}。
+
+Voyager 是这一方向上具有代表性的早期工作：在 Minecraft 这一开放沙盒中，Voyager 通过自动课程驱动探索，借助“可执行代码”形式的技能库不断累积新技能，从而在长达数天的开放学习过程中持续扩张行为空间~\citep{wang2023voyager}。Reflexion 则提出以语言反馈替代参数更新，让智能体在每轮失败后将口头反思写入情景记忆缓冲区，从而显著提升下一轮决策质量~\citep{shinn2023reflexion}。ExpeL 将上述思想推广到多任务设置，使智能体能够自动从历史轨迹中归纳出可迁移的洞察~\citep{zhao2024expel}。ReAct 等更基础的框架则提供了“推理—行动—观察”交替的执行范式，为上述自进化机制提供了运行底座~\citep{yao2023react}。AgentBench、CoALA 等评测与架构工作则从测试与理论两端为该方向提供了系统化支撑~\citep{liu2024agentbench,sumers2024coala}。
+
+从持续学习的视角审视这些工作，可以观察到三个一致的趋势。第一，自进化智能体的“技能库”本质上是一种可写、可检索、可遗忘的长期存储，其与类增量学习中的特征记忆、分类头记忆之间存在直接的结构对应~\citep{wang2023voyager,sumers2024coala,zhuang2022acil}。第二，自进化智能体在长期运行过程中同样会面临灾难性遗忘——大量经验对早期技能产生覆盖式干扰，与持续指令微调中观察到的“通用能力下滑”现象一脉相承~\citep{wang2024trace,luo2023empirical,shi2024llmcontinual}。第三，自进化机制对“增量更新的稳定性”有极高要求：在长达数小时甚至数天的交互过程中，任何一次不稳定更新都可能让智能体丧失某项关键技能，因此对更新机制的可控性提出了远超传统离线训练的诉求~\citep{fan2025selfevolving,gao2025selfevolving}。
+
+
+\subsection{当前研究的主要瓶颈与发展趋势}
+
+综观近年综述与基准评测的结论~\citep{wang2024survey,zhou2023cil_survey_zh,leo2024survey,qiao2024tscil}，当前持续学习研究仍存在若干尚未解决的共性瓶颈。第一，回放与记忆类方法对历史样本访问权限和缓存规模存在较强依赖：在严格无回放或极小回放的设定下，多数主流方法的性能与联合训练上限仍有明显差距，并且对样本选择、类别平衡和缓存更新策略高度敏感~\citep{aljundi2019gradient,chaudhry2019continual,chaudhry2021using,ASER}。第二，正则化与知识蒸馏类方法虽然存储开销较小，但其稳定性往往取决于参数重要性估计、蒸馏目标和超参数权重；当任务分布差异较大、阶段数持续增加或新旧类别边界高度交叠时，近似约束容易逐步失效~\citep{kirkpatrick2017ewc,li2017learning,Douillard_Cord_Ollion_Robert_Valle_2020}。第三，结构扩展、提示池和专家类方法通过隔离参数缓解干扰，但会带来模型容量增长、任务路由错误、提示选择不稳定以及专家碎片化等系统问题~\citep{rusu2016progressive,wang2022dualprompt,smith2023coda,chen2024coin}。
+
+第四，长序列阶段下的稳定性问题尚未根本解决：当阶段数从十几个扩展到上百个时，多数方法会出现误差累积、表征坍缩或类间边界塌陷~\citep{cao2024continual,chen2025class,chen2025sefe}。第五，跨任务形态的统一性不足：分类、分割、检测、生成、路由等不同任务形态的持续学习研究在很大程度上仍各自为政，方法迁移与评测对比缺乏统一接口~\citep{wang2024survey,leo2024survey}。第六，预训练模型和大语言模型虽然提供了更强的表征基础，但遗忘评估从闭集准确率扩展到知识保持、指令跟随、安全对齐、风格一致性和跨模态对齐等多维能力，传统 AA、FM、BWT 等指标已不足以完整刻画其长期退化过程~\citep{wang2025llm_cl_zh,shi2024llmcontinual,wang2024trace}。此外，工程化与产业化层面的指标体系仍不完善：现有评测主要聚焦学术指标，而对延迟、显存峰值、能耗、缓存增长与隐私合规等部署关键约束的系统性度量仍不充分~\citep{de2021continual,yang2023medmnist,derakhshani2022lifelonger}。
+
+从发展趋势看，持续学习正在从单一算法设计转向“表征基础、记忆机制、适配模块、评测协议与部署约束”的系统协同。预训练表征驱动、参数高效适配、模块化能力扩展、面向 LLM 的能力保持、面向智能体的长期记忆管理，以及面向产业部署的隐私与效率约束，正在成为下一阶段的主要研究方向~\citep{wang2025llm_cl_zh,cossu2024continual,zhou2024class,packer2023memgpt}。这也意味着后续方法若要具备实际价值，需要同时回答旧知识如何保存、新知识如何写入、计算与存储如何受控，以及不同任务形态能否共享统一实现框架等问题。
+
+\section{研究目标与关键问题}
+
+本课题面向“基于闭式解算法的持续学习方法与算法实现”，结合上述背景与现状分析，确立如下研究目标：
+\begin{enumerate}
+    \item 构建统一的递归岭回归闭式解增量学习框架，从理论上明确其与联合训练目标的等价条件；
+    \item 设计适配多任务形态（疾病分类、时间序列分类、二维图像与三维点云语义分割、多模态大语言模型专家路由）的算法方案，并保持算法内核的一致性；
+    \item 在不保存历史原始数据的前提下，从平均准确率、遗忘率、训练效率与隐私属性等多个维度对所提方法进行系统验证；
+\end{enumerate}
+
+围绕上述目标，本课题拟解决的关键科学问题与技术问题包括：
+\begin{itemize}
+    \item \textbf{无回放设定下的旧任务边界保持}。如何在不访问任何历史原始样本的条件下，仅依靠递推统计量维持旧任务的判别边界不被新数据牵引~\citep{zhuang2022acil,fang2024air}；
+    \item \textbf{冻结主干前提下的可塑性维护}。如何在主干编码器冻结、仅更新解析分类头与统计量的设定下，仍然为新类别提供足够的判别能力~\citep{GKEAL_Zhuang_CVPR2023,GACL_Zhuang_NeurIPS2024}；
+    \item \textbf{闭式解从分类到稠密预测与路由的推广}。如何将闭式解从样本级分类扩展到像素级、点级稠密预测以及专家选择路由，需要在伪标签机制、空间一致性约束与路由稳定性等方面给出新的设计~\citep{cermelli2020mib,li2025cfsseg,li2026cfrouter}；
+    \item \textbf{异构任务的统一数学结构}。如何在分类、分割、路由等异构任务中使用同一套递归闭式解主干公式，使方法在“一份理论—多种应用”意义上具有可推广性~\citep{zhuang2024dsal}；
+\end{itemize}
+
+除上述核心问题外，本课题还关注以下两类落地问题：
+\begin{itemize}
+    \item \textbf{统一性问题}：如何在医学影像、时间序列、语义分割、专家路由等异构任务中使用同一套递归闭式解公式，并以模块化方式组织算法实现，避免“一种任务一套代码”的工程碎片化；
+    \item \textbf{可复现问题}：如何建立统一实验协议，包括数据划分、阶段顺序、评估指标与运行环境，以确保不同任务结论可对比、可复验，并便于后续研究者在此基础上进行扩展~\citep{wang2024survey,qiao2024tscil}。
+\end{itemize}
+
+围绕上述目标与关键问题，后续各章将依次展开方法论建模、应用算法设计、统一实验评估与总结展望。

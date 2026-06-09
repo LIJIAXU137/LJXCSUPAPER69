@@ -1,0 +1,394 @@
+\chapter{语义分割持续学习}
+
+本章在第二章递归岭回归闭式解算法的基础上，研究其在语义分割持续学习任务中的具体实现。与传统图像分类不同，语义分割要求模型对每个像素或点分别预测语义类别，因此具有更高的输出分辨率和更细粒度的类别边界。在持续学习场景下，这种逐像素或逐点预测特性会显著放大灾难性遗忘问题：一方面，新类别学习容易破坏旧类别边界；另一方面，在无历史样本回放的条件下，旧类别常常在新任务数据中被错误地吸收到背景类中，造成语义漂移。针对上述问题，本文构建了一个基于闭式解的类增量语义分割框架，将解析分类头、随机高维映射和伪标签机制相结合，实现二维图像与三维点云统一建模。
+
+\begin{figure*}[htbp]
+  \centering
+  \includegraphics[width=1\linewidth]{images/cfsseg-overview.pdf}
+    \caption{所提方法 CFSSeg 的总体框架。在第 $t$ 步中，模型利用第 $t-1$ 步的模型通过伪标签机制生成伪标签，并与真实标签融合形成混合标签。模型继承第 $t-1$ 步学习得到的分类头 $\widehat{\Phi}_{t-1}$，并结合混合标签、提取特征 $\mathbf{E}_t$ 以及第 $t-1$ 步的 $\Psi_{t-1}$。随后采用 C-RLS 算法进行更新，得到 $\widehat{\Phi}_{t}$ 和 $\Psi_{t}$。}
+  \label{fig:2}
+\end{figure*}
+
+\section{任务定义与挑战分析}
+
+设输入样本可以是二维图像，也可以是三维点云。对于第 $t$ 个增量阶段，输入空间记为
+\begin{equation}
+\mathbf{X}_t \in \mathbb{R}^{N_t \times C_{in}},
+\end{equation}
+其中 $N_t$ 表示像素数或点数，$C_{in}$ 为输入通道维度。输出标签空间记为
+\begin{equation}
+\mathbf{Y}_t \in \mathcal{C}_t^{N_t},
+\end{equation}
+其中 $\mathcal{C}_t$ 为截至第 $t$ 阶段已见类别集合，包含背景类 $c_b$。与分类任务不同，语义分割预测的是每个位置的类别分布，因此模型输出为
+\begin{equation}
+q_{\theta_t}(\mathbf{X}_t) \in \mathbb{R}^{N_t \times |\mathcal{C}_t|},
+\end{equation}
+最终分割结果由每个位置的最大响应类别给出。
+
+在类增量语义分割中，第 $t$ 阶段引入新类别集合 $S_t$，并满足不同阶段类别集合互不重叠。根据训练标注方式不同，可进一步划分为三种典型设定。
+
+第一种是顺序设定。在该设定下，当前阶段数据同时包含旧类别和新类别的标注，因此增量学习难度相对较低，但仍需要避免参数更新破坏已有类别判别边界。
+
+第二种是不相交设定。在该设定下，当前阶段只显式标注新类别，旧类别在当前数据中统一被标注为背景。由于旧类别并未真正消失，而是被错误映射到背景类中，模型容易在增量训练后将旧类别语义吸收到背景中，从而产生语义漂移。
+
+第三种是重叠设定。在该设定下，背景标签不仅可能表示真实背景，还可能隐含旧类别甚至未来尚未出现的类别，因此比不相交设定更具挑战性。模型既要学习新类别，又要避免误将背景区域中的旧知识完全覆盖。
+
+与传统基于梯度的持续学习方法相比，语义分割任务的持续学习具有以下三个更突出的挑战。
+
+其一，稳定性与可塑性矛盾更强。由于输出是像素级或点级稠密预测，分类头的每次更新都会对大量局部决策边界产生影响，因此遗忘现象更容易被放大。
+
+其二，计算成本更高。常规语义分割模型参数量大、训练周期长，而持续学习需要多阶段反复训练，若仍采用多轮梯度下降，将带来较大的时间开销。
+
+其三，语义漂移更难处理。特别是在不相交和重叠设定下，背景类承担了“真实背景”和“被隐藏旧类别”两种角色，如果没有额外机制对其进行区分，旧知识会持续塌缩到背景标签中。
+
+因此，需要一种既能避免梯度干扰、又能显式缓解语义漂移的持续学习方法。本章采用第二章给出的递归闭式解框架，并结合伪标签机制来解决上述问题。
+
+\section{基于闭式解的语义分割持续学习框架}
+
+\subsection{总体思路}
+
+该框架的核心思路是将语义分割模型拆分为“稳定的编码器”和“可解析更新的分类头”两部分。具体而言，在第一个阶段先利用传统监督学习训练分割编码器，使其获得基础视觉表征能力；从第二阶段开始，冻结编码器参数，仅使用编码器抽取的特征训练解析分类头。这样做的直接目的，是将持续学习中的参数干扰限制在分类头部分，从而避免反向传播对历史表征造成破坏。
+
+然而，仅冻结编码器虽然能增强稳定性，却会削弱模型学习新类别的可塑性。为弥补这一问题，本文在分类头前加入随机初始化隐藏层，将编码器输出映射到更高维的特征空间。根据高维空间中线性可分性增强的直观规律，经过随机映射与非线性激活后，旧类别与新类别通常更容易被线性分类器分开，从而使解析分类头在不更新编码器的情况下仍然具备较强的适应能力。
+
+在此基础上，本文直接将第二章的递归岭回归闭式解用于分类头更新。为与全文记号一致，记第 $t$ 阶段编码器输出与高维映射后的数据矩阵为
+\begin{equation}
+\mathbf{X}_t^{E} = \mathrm{ReLU}(\mathbf{X}_t^{\mathrm{encoder}}\Phi^E),
+\label{eq:cfsseg_e}
+\end{equation}
+其中 $\mathbf{X}_t^{\mathrm{encoder}}$ 为冻结编码器提取的位置级特征，$\Phi^E$ 为随机初始化映射矩阵。于是，语义分割分类头的更新可以直接使用第二章式(\ref{eq:phi_recursive_final})，只需将该式中的数据矩阵替换为 $\mathbf{X}_t^{E}$，即仅依赖上一阶段统计量和当前阶段样本完成递推，无需访问历史原始数据。
+
+\subsection{二维图像与三维点云统一建模}
+
+本文方法同时适用于二维图像与三维点云，其统一性体现在三个层面。
+
+首先，在输入形式上，尽管二维图像以规则网格表示、三维点云以无序点集表示，但经过编码器后都可抽象为位置级特征集合，因此均可写成矩阵形式并输入高维映射层。
+
+其次，在学习目标上，两类任务本质上都是对位置级特征进行类别分配，因此都可视为对位置样本执行多类线性回归或线性判别，适合用岭回归闭式解来学习解析分类头。
+
+最后，在持续学习更新方式上，无论是像素级预测还是点级预测，分类头的增量更新都可统一归结为第二章定义的逆自相关矩阵 $\Psi_t$ 与权重矩阵 $\widehat{\Phi}_t$ 的递推过程。换言之，不同模态的差异主要体现在编码器结构和伪标签生成方式上，而增量更新核心保持一致。
+
+在具体实现中，二维图像实验采用 DeepLabv3 作为基础分割网络~\citep{chen2017deeplabv3}，使用 ResNet-101 作为主干~\citep{he2016resnet}；三维点云实验采用 DGCNN 作为编码器~\citep{wang2019dgcnn}。两种模型在初始阶段均通过常规监督学习完成预训练，而在后续增量阶段统一切换到解析分类头更新模式。这一设计保证了方法在不同模态上具有统一理论基础和较强工程可迁移性。
+
+\section{语义漂移与伪标签机制}
+
+\subsection{二维图像伪标签策略}
+
+在不相交和重叠设定下，当前阶段训练标签中大量背景像素可能实际上属于旧类别。如果直接把这些像素都当作背景参与训练，那么闭式解分类头虽然不会因为梯度更新而遗忘，但其回归目标本身已经发生偏移，仍然会促使旧类别语义向背景类塌缩。因此，需要利用上一阶段模型对背景像素进行再判断。
+
+设第 $t-1$ 阶段模型对位置 $i$ 的输出为 $q_{\theta_{t-1}}(i,c)$，则其不确定性定义为
+\begin{equation}
+U^{(i)} = 1 - \sigma\left(\max_c q_{\theta_{t-1}}(i,c)\right),
+\label{eq:2d_uncertainty}
+\end{equation}
+其中 $\sigma(\cdot)$ 表示 Sigmoid 函数。若最大响应较高，则表示旧模型对当前位置判断较为自信，对应不确定性较低；反之则说明当前位置更可能是真实背景或难例区域。
+
+基于此，二维图像伪标签定义为
+\begin{equation}
+\tilde{Y}_t^{(i)}=
+\begin{cases}
+Y_t^{(i)}, & Y_t^{(i)} \in S_t, \\
+Y_t^{(i)}, & (Y_t^{(i)}=c_b) \wedge (U^{(i)} > \tau), \\
+\hat{Y}_{t-1}^{(i)}, & (Y_t^{(i)}=c_b) \wedge (U^{(i)} \leq \tau),
+\end{cases}
+\label{eq:2d_pseudo}
+\end{equation}
+其中 $\tau$ 为阈值。当一个像素在当前标签中被标为背景，但旧模型对其预测足够自信时，本文使用旧模型预测标签替代背景标签；当旧模型不确定时，则保留其背景标签。这一策略的本质，是在不引入历史原始图像的前提下，从当前数据中挖掘出隐含的旧类别监督，从而缓解语义漂移。
+
+\subsection{三维点云伪标签策略}
+
+在三维点云场景中，单点预测通常比二维图像更容易受局部稀疏性和邻域扰动影响。因此，本文在点云伪标签构造中进一步引入邻域信息。对于点 $i$，首先基于空间坐标寻找其 $K$ 个近邻，并根据坐标相似性计算邻域权重 $w_k$。随后，利用上一阶段模型预测结果和邻域加权分布估计点的不确定性。本文采用基于 BALD 思想的空间不确定性度量，可写为
+\begin{equation}
+\begin{aligned}
+U^{(i)} = &- \sum_c \left[\frac{1}{K}\sum_k q_{t-1}(i,c)w_k\right]
+\log\left[\frac{1}{K}\sum_k q_{t-1}(i,c)w_k\right] \\
+&+ \frac{1}{K}\sum_{c,k} \left(q_{t-1}(i,c)w_k\right)
+\log\left(q_{t-1}(i,c)w_k\right).
+\end{aligned}
+\label{eq:3d_uncertainty}
+\end{equation}
+
+对应的点云伪标签规则为
+\begin{equation}
+\tilde{Y}_t^{(i)}=
+\begin{cases}
+Y_t^{(i)}, & Y_t^{(i)} \in S_t, \\
+\hat{Y}_{t-1}^{(i)}, & (Y_t^{(i)}=c_b) \wedge (\hat{Y}_{t-1}^{(i)} \neq c_b) \wedge (U^{(i)} \leq \tau), \\
+\hat{Y}_{t-1}^{(i,k')}, & (Y_t^{(i)}=c_b) \wedge \big((\hat{Y}_{t-1}^{(i)}=c_b) \vee (U^{(i)} > \tau)\big), \\
+c_b, & \text{其他情况},
+\end{cases}
+\label{eq:3d_pseudo}
+\end{equation}
+其中 $\hat{Y}_{t-1}^{(i,k')}$ 表示满足非背景且不确定性较低条件的近邻点预测类别。与二维策略相比，三维点云方法不仅考虑当前点自身预测，还考虑邻域空间结构，从而更适合处理点云中的局部稀疏和几何连续性问题。
+
+\section{实验设置}
+
+\subsection{数据集与评价协议}
+
+二维图像实验采用 Pascal VOC2012 数据集~\citep{everingham2010voc}。该数据集共包含 21 个语义类别，其中包括背景类，训练集包含 10582 张图像，验证集包含 1449 张图像。本文在该数据集上分别验证顺序设定、不相交设定和重叠设定下的类增量语义分割性能。
+
+三维点云实验采用 S3DIS 和 ScanNet 两个室内场景语义分割数据集~\citep{armeni2016s3dis,dai2017scannet}。S3DIS 包含 6 个区域共 272 个房间，遵循常见设定，以 Area 5 作为验证区域；ScanNet 包含 1513 个室内扫描场景，其中 1210 个用于训练，312 个用于验证。为了构造点云增量学习输入，本文使用滑动窗口切分房间，并从每个块中随机采样 2048 个点作为网络输入。类别顺序方面，分别采用按原始标注顺序划分的 $S^0$ 和按类别字母顺序划分的 $S^1$ 两种设置。
+
+评价指标采用平均交并比（mIoU）。为了更全面地分析稳定性与可塑性，本文同时报告旧类别集合、新类别集合以及全部类别上的 mIoU，其中旧类别集合反映知识保持能力，新类别集合反映增量适应能力，全部类别结果反映整体持续学习性能。
+
+\subsection{实现细节}
+
+二维图像实验中，初始阶段使用 DeepLabv3 和 ResNet-101 主干进行监督训练；后续增量阶段冻结编码器，在其后接入随机初始化隐藏层和解析分类头。二维实验中高维映射维度 $d_E$ 设为 8192，岭回归正则项系数 $\gamma$ 设为 1，二维伪标签阈值 $\tau$ 设为 0.4。
+
+三维点云实验中，采用 DGCNN 作为点云编码器。初始阶段按常规分割训练，后续增量阶段冻结编码器，仅更新高维映射与解析分类头。三维实验中高维映射维度 $d_E$ 设为 5000，正则项 $\gamma$ 设为 1；伪标签阈值通过交叉验证确定，在 S3DIS 与 ScanNet 上分别设为 0.0035 和 0.001。
+
+对比方法方面，二维图像实验主要与典型无样本持续语义分割方法进行比较，包括基于知识蒸馏、背景建模和结构补偿的代表方法，如 MiB 和 PLOP~\citep{cermelli2020mib,douillard2021plop}；三维点云实验则与微调基线、EWC 以及现有代表性三维类增量分割方法进行比较。同时，本文还给出联合训练上界 JT，以作为理论参考。
+
+\section{实验结果与分析}
+
+
+
+\begin{table*}[htbp]
+    \caption{在 S3DIS 和 ScanNet 数据集 $S^{0}$ 划分下，三维类增量语义分割方法的定量比较。BT 代表仅在第一步的数据集上训练。增量方法取得的最佳结果以粗体显示。\\}
+    \label{tab:experiment:s0}
+    \centering
+    % \setlength{\tabcolsep}{6pt} % Reduced column spacing slightly for the extra column
+    \setlength{\tabcolsep}{4pt} % 进一步缩小列间距以适应页面
+    \renewcommand{\arraystretch}{1.05} % Adjust row spacing slightly
+    \resizebox{\textwidth}{!}{ % 使用 resizebox 自动调整表格宽度至页宽
+        % Model 列与各任务指标列
+        \begin{tabular}{ll| c| ccc| ccc| ccc}
+             \toprule[1pt]
+            &\multirow{2}*{方法} &\multirow{2}*{模型}&
+		\multicolumn{3}{c|}{8-1 (6 阶段)} & \multicolumn{3}{c|}{10-1 (4 阶段) } &         
+            \multicolumn{3}{c}{12-1 (2 阶段)} \\
+    		&&& 0-7 & 8-12 & 全部 & 0-9 & 10-12 & 全部 & 0-11 & 12 & 全部\\
+
+            \midrule % Use midrule instead of toprule here
+            \multirow{6}*{S3DIS}
+            & BT   & DGCNN     & 49.85 &   -   &   -   & 47.03 &   -   &   -   & 45.37 &   -   &   -   \\
+            % & F\&A & -    & DGCNN     & 41.21 & 9.99  & 29.21 & 38.50 & 17.41 & 33.63 & 44.57 & 0.05  & 41.14 \\
+            & FT   & DGCNN     & 5.45  & 4.94  & 5.25  & 16.66 & 11.54 & 15.48 & 28.34 & 34.02 & 28.77 \\
+            & EWC \cite{EWC} & DGCNN & 30.99 & 4.16 & 20.67 & 39.14 & 14.73 & 33.51 & 37.23 & 15.49 & 35.53 \\
+            & Yang et al. \cite{Yang3D} & DGCNN & 36.90 & 13.76 & 27.80 & 36.98 & 26.60 & 34.59 & 44.54 & \textbf{38.47} & 44.07 \\
+            & 本文方法 & DGCNN & \textbf{49.77} & \textbf{28.69} & \textbf{41.66} & \textbf{45.26} & \textbf{34.05} & \textbf{42.67} & \textbf{45.19} & 30.71 & \textbf{44.08} \\
+            
+            & 联合训练   & DGCNN     & 48.99 & 41.76 & 46.21 & 46.72 & 45.11 & 46.35 & 47.22 & 35.65 & 46.33 \\
+            \midrule[1pt] % Stronger separator between datasets
+            % --- ScanNet ---
+            &\multirow{2}*{方法} &\multirow{2}*{模型}&
+		\multicolumn{3}{c|}{15-1 (6 阶段)} & \multicolumn{3}{c|}{17-1 (4 阶段)} &         
+            \multicolumn{3}{c}{19-1 (2 阶段)} \\
+    		&&& 0-14 & 15-19 & 全部 & 0-16 & 17-19 & 全部 & 0-18 & 19 & 全部\\
+
+            \midrule % Use midrule instead of toprule here
+            \multirow{6}*{ScanNet}
+                & BT   & DGCNN     & 37.52 &   -   &   -   & 34.72 &   -   &   -   & 32.64 &   -   &   -   \\
+            % & F\&A & -    & DGCNN     & 25.45 & 1.23  & 19.41 & 21.83 & 2.05  & 18.86 & 30.99 & 0.95  & 29.49 \\
+                & FT   & DGCNN     & 4.41  & 3.20  & 4.10  & 2.76  & 4.19  & 2.97  & 11.37  & 8.86 & 11.25  \\
+                & EWC \cite{EWC} & DGCNN & 12.32 & 2.48 & 9.86 & 11.34 & 1.20 & 9.82 & 17.84 & 11.11  & 17.51 \\
+                & Yang et al. \cite{Yang3D} & DGCNN & 8.46 & 4.44 & 7.46  & 12.29 & 6.48 & 11.42 & 25.56 & 11.31 & 24.85 \\
+                & 本文方法 & DGCNN & \textbf{32.56} & \textbf{10.22} & \textbf{26.97} & \textbf{29.59} & \textbf{12.83} & \textbf{27.98} & \textbf{28.54} & \textbf{16.88} & \textbf{27.96} \\
+            
+                & 联合训练   & DGCNN     & 37.59 & 16.42 & 32.30 & 34.78 & 16.69 & 32.07 & 32.28 & 18.12 & 32.08 \\
+            \bottomrule[1pt]
+    \end{tabular}
+    } % end \resizebox
+    % \vspace{-1em} % Optional vertical space reduction after table
+\end{table*}
+
+\begin{table*}[htbp]
+    \centering
+    \caption{在 S3DIS 和 ScanNet 数据集 $S^{1}$ 划分下，三维类增量语义分割方法的定量比较。BT 代表仅在第一步的数据集上训练。增量方法取得的最佳结果以粗体显示。\\}
+    \label{tab:experiment:s1}
+    \setlength{\tabcolsep}{4pt} % 进一步缩小列间距以适应页面
+    \renewcommand{\arraystretch}{1.05} % Adjust row spacing to match reference
+    \resizebox{\textwidth}{!}{ % 使用 resizebox 自动调整表格宽度至页宽
+        % Model 列与各任务指标列
+        \begin{tabular}{ll| c| ccc| ccc| ccc}
+             \toprule[1pt]
+            &\multirow{2}*{方法} &\multirow{2}*{模型}&
+		\multicolumn{3}{c|}{8-1 (6 阶段)} & \multicolumn{3}{c|}{10-1 (4 阶段) } &         
+            \multicolumn{3}{c}{12-1 (2 阶段)} \\
+    		&&& 0-7 & 8-12 & 全部 & 0-9 & 10-12 & 全部 & 0-11 & 12 & 全部\\
+            \midrule % Use midrule instead of toprule here
+            \multirow{6}*{S3DIS}
+            & BT   & DGCNN     & 37.61 &   -   &   -   & 42.93 &   -   &   -   & 44.68 &   -   &   -   \\
+            % & F\&A & -    & DGCNN     & 37.71 & 42.89 & 39.44 & 41.11 & 35.64 & 39.85 & 45.35 &  0.05 & 41.86 \\
+            & FT   & DGCNN     & 12.69 &  2.57 & 8.80  & 10.11 &  2.33 & 8.31  & 25.05 &  11.75 & 24.04 \\
+            & EWC \cite{EWC} & DGCNN & 17.50 & 2.59 & 11.77 & 20.54 & 8.86 & 17.84 & 23.20 & 11.40 & 22.38 \\
+            & Yang et al. \cite{Yang3D} & DGCNN & 41.28 &11.64 & 29.88  & 36.45 & 20.14 & 31.13 & 37.38 & 22.40 & 36.23 \\
+            & 本文方法 & DGCNN     & \textbf{51.33} & \textbf{30.72} & \textbf{43.40} & \textbf{45.16} & \textbf{35.98} & \textbf{43.04} & \textbf{45.65} & \textbf{27.53} & \textbf{44.25} \\
+            
+            & 联合训练   & DGCNN     & 39.29 & 57.42 & 46.26 & 42.19 & 59.08 & 46.09 & 46.96 & 38.89 & 46.35 \\
+            \midrule[1pt] % Stronger separator between datasets
+            % --- ScanNet ---
+            &\multirow{2}*{方法} &\multirow{2}*{模型}&
+		\multicolumn{3}{c|}{15-1 (6 阶段)} & \multicolumn{3}{c|}{17-1 (4 阶段)} &         
+            \multicolumn{3}{c}{19-1 (2 阶段)} \\
+    		&&& 0-14 & 15-19 & 全部 & 0-16 & 17-19 & 全部 & 0-18 & 19 & 全部\\
+            \midrule % Use midrule instead of toprule here
+            \multirow{6}*{ScanNet}
+            & BT   & DGCNN     & 29.01 &   -   &   -   & 30.24 &   -   &   -   & 31.59 &   -   &   -   \\
+            % & F\&A & -    & DGCNN     & 12.29 & 4.24  & 10.28 & 13.18 &  5.87 & 12.09 & 30.41 &  0.01 & 28.89 \\
+            & FT   & DGCNN     & 4.20  & 1.61  & 3.55  &  3.63 & 1.00  & 3.24  &  9.04 &  0.22 &  8.60 \\
+            % Corrected EWC Citation Source from PANS to PNAS
+            & EWC \cite{EWC} & DGCNN & 14.93 & \textbf{33.30} & 19.52 &  8.78 & \textbf{31.74} & 12.22 & 12.65 &  3.19 & 12.18 \\
+            & Yang et al. \cite{Yang3D} & DGCNN & 12.17 & 0.16 & 9.17 & 10.19 & 5.67 & 9.52 & 25.08 & \textbf{15.28} & 24.59 \\
+            & 本文方法 & DGCNN     & \textbf{28.20} & 16.09 & \textbf{25.18} & \textbf{28.43} & 15.01 & \textbf{26.42} & \textbf{28.71} & 11.84 & \textbf{27.84} \\
+            
+            & 联合训练   & DGCNN     & 28.93 & 39.06 & 31.46 & 30.12 & 40.33 & 31.65 & 31.29 & 30.03 & 31.23 \\
+            \bottomrule[1pt]
+    \end{tabular}
+    } % end \resizebox
+\end{table*}
+
+
+
+\begin{table*}[htbp]
+	\caption{Pascal VOC2012 在 \textit{顺序（sequential）} 设定下的 CSS mIoU (\%) 定量比较。对比方法的结果直接取自原论文和 \cite{CSSsurvey}。最佳结果使用\textbf{粗体}表示。}
+       
+	\centering
+	\scriptsize
+	\setlength{\tabcolsep}{5pt}
+	\renewcommand{\arraystretch}{1.12}
+    \resizebox{\textwidth}{!}{
+            \begin{tabular}{@{}llcccc ccc@{}}
+				\toprule[0.8pt]
+                \multirow{2}*{设定} &\multirow{2}*{方法} &\multirow{2}*{模型}&
+				\multicolumn{3}{c}{15-1 (6 阶段)} & \multicolumn{3}{c}{15-5 (2 阶段)} \\
+                \cmidrule(lr){4-6}\cmidrule(l){7-9}
+                &&& 0-15 & 16-20 & 全部 & 0-15 & 16-20 & 全部\\
+				\midrule
+
+				\multirow{9}*{顺序设定} 
+                &FT&DeepLabv3+&49.0&17.8&41.6&62.0&38.1&56.3\\
+                &LwF~\cite{LWF} &DeepLabv3+&33.7 &13.7 &29.0&68.0 &43.0 &62.1\\
+                &LwF-MC~\cite{icarl}&DeepLabv3+&12.1&1.9&9.7&70.6&19.5&58.4\\
+                &ILT~\cite{ILT} &DeepLabv3+&49.2&30.3&48.3&71.3&\textbf{47.8}&65.7\\
+        		&CIL~\cite{CIL} &DeepLabv3+&52.4&22.3&45.2&63.8&39.8&58.1\\
+                    &MiB~\cite{MiB}&DeepLabv3+&35.7&11.0&29.8&73.0&44.4&66.1\\
+                    &SDR~\cite{SDR}&DeepLabv3+&58.5&10.1&47.0&73.6&46.7&67.2\\	
+                    &SDR+MiB~\cite{SDR}&DeepLabv3+&58.1&11.8&47.1&74.6&43.8&67.3\\
+                    &本文方法 &DeepLabv3 &\textbf{78.1} &\textbf{42.0} &\textbf{70.0} &\textbf{78.1} &42.0 &\textbf{70.0} \\
+
+        \bottomrule[0.8pt]
+		\end{tabular}
+    }
+	\label{table-VOC2012:1}
+\end{table*}
+
+\begin{table*}[htbp]
+	\caption{Pascal VOC2012 在 \textit{不相交（disjoint）} 和 \textit{重叠（overlapped）} 设定下的 CSS mIoU (\%) 定量比较。对比方法的结果直接取自原论文和 \cite{CSSsurvey}。最佳结果使用\textbf{粗体}表示。}
+
+	\centering
+	\scriptsize
+      \setlength{\tabcolsep}{5pt}
+      \renewcommand{\arraystretch}{1.12}
+    \resizebox{\textwidth}{!}{
+            \begin{tabular}{@{}llcccc ccc@{}}
+                        \toprule[0.8pt]
+                        \multirow{2}*{设定} &\multirow{2}*{方法} &\multirow{2}*{模型}&
+                        \multicolumn{3}{c}{15-1 (6 阶段)} & \multicolumn{3}{c}{10-1 (11 阶段)} \\
+                        \cmidrule(lr){4-6}\cmidrule(l){7-9}
+                        &&& 0-15 & 16-20 & 全部 & 0-10 & 11-20 & 全部\\
+                        \midrule
+                        \multirow{6}*{不相交设定} &FT&DeepLabv3&0.20&1.80&0.60&6.30&1.10&3.80\\
+                        &MiB~\cite{MiB}&DeepLabv3 &46.20&12.90&37.90&9.50&4.10&6.90 \\
+                        &PLOP~\cite{douillard2021plop}&DeepLabv3&57.86&13.67&46.48&9.70&7.00&8.40 \\
+                        &SDR~\cite{SDR} &DeepLabv3+ &59.40&14.30&48.70&17.30&11.00&14.30\\ 
+                        &RCIL~\cite{RCIL}&DeepLabv3&66.10&18.20&54.70&30.60&4.70&18.20 \\
+                    &本文方法&DeepLabv3&\textbf{77.66}&\textbf{40.33}&\textbf{68.77}&\textbf{70.85}&\textbf{42.13}&\textbf{57.17} \\
+                        \midrule
+                        \multirow{15}*{重叠设定} &FT&DeepLabv3&0.20&1.80&0.60&6.30&2.80&4.70\\
+                        &EWC~\cite{EWC} &DeepLabv3&0.30 &4.30 &1.30&- &- &-\\
+                        &LwF-MC~\cite{icarl}&DeepLabv3 &6.40&8.40&6.90&4.65&5.90&4.95\\
+                        &ILT~\cite{ILT} &DeepLabv3&4.90&7.80&5.70&7.15&3.67&5.50\\
+                        &MiB~\cite{MiB}&DeepLabv3&34.22&13.50&29.29&12.25&13.09&12.65\\
+                        % &SSUL*~\cite{SSUL}&NeurIPS2021&DeepLabv3&78.06&28.54&66.27&73.78&41.13&58.23\\
+                        &PLOP~\cite{douillard2021plop}&DeepLabv3&65.12&21.11&54.64&44.03&15.51&30.45 \\
+                        &UCD+PLOP~\cite{UCD}&DeepLabv3&66.30&21.60&55.10&42.30&28.30&35.30\\
+                        &REMINDER~\cite{REMINDER} &DeepLabv3&68.30&27.23&58.52&-&-&- \\
+                        &RCIL~\cite{RCIL}&DeepLabv3&70.60&23.70&59.40&55.40&15.10&34.30\\
+                        % &RBC*~\cite{RBC}&ECCV2022&DeepLabv3&69.54&38.44&62.14&-&-&-\\
+                        &SPPA~\cite{SPPA}&DeepLabv3&66.20&23.30&56.00&-&-&-\\
+                        &CAF~\cite{CAF}&DeepLabv3&55.70&14.10&45.30&-&-&-\\
+                        % &DKD*~\cite{DKD} &NeurIPS2022&DeepLabv3&78.09&42.72&69.67&-&-&- \\
+                        &AWT+MiB~\cite{AWT}&DeepLabv3 &59.10&17.20&49.10&33.20&18.00&26.00\\
+                        &EWF+MiB~\cite{EWF}&DeepLabv3&78.00&25.50&65.50&56.00&16.70&37.30\\
+                        % &IDEC~\cite{IDEC}&TPAMI2023&DeepLabv3&76.96&36.48&67.32&70.74&46.30&59.10\\
+                        &GSC~\cite{GSC}&DeepLabv3&72.10&24.40&60.80&50.60&17.30&34.70 \\
+                    &本文方法&DeepLabv3&\textbf{79.16}&\textbf{38.00}&\textbf{69.36}&\textbf{75.02}&\textbf{41.20}&\textbf{58.91} \\
+                        \midrule
+                        联合训练 & - & DeepLabv3&79.77&72.35&77.43&78.41&76.35&77.43\\
+                        \bottomrule[0.8pt]
+            \end{tabular}
+    }
+  
+	\label{table-VOC2012:2}
+\end{table*}
+
+\subsection{二维图像结果分析}
+
+在 Pascal VOC2012 数据集上，本文方法在不同设定下均表现出明显优势。在顺序设定下，本文方法在 15-1 配置上取得了 70.0\% 的总体 mIoU，其中旧类别为 78.1\%，新类别为 42.0\%。这一结果说明，即使仅在初始阶段训练编码器，后续使用闭式解分类头也能够较好地兼顾旧知识保持与新知识吸收。
+
+在更具挑战的不相交设定下，本文方法在 15-1 配置上取得了 68.77\% 的总体 mIoU，显著高于现有代表方法；在 10-1 配置下，本文方法达到 57.17\% 的总体 mIoU，相较于部分现有方法存在较大领先幅度。这表明伪标签机制能够有效缓解旧类别被错误吸收到背景中的问题。
+
+在重叠设定下，本文方法同样保持领先。在 15-1 配置上总体 mIoU 达到 69.36\%，在 10-1 配置上达到 58.91\%。值得注意的是，重叠设定中的背景标签更复杂，既可能包含真实背景，又可能混入历史类别和未来类别，但本文方法仍能取得稳定结果，说明闭式解更新与伪标签修正的组合对复杂语义漂移场景具有较好的鲁棒性。
+
+从结果趋势看，本文方法对旧类别的保持能力尤其突出，这与第二章给出的理论分析是一致的。由于增量阶段不再使用梯度更新编码器，旧类别特征表征保持稳定；与此同时，随机高维映射增强了新类别在解析分类头中的线性可分性，从而使模型在旧类别和新类别两方面都具备较强表现。
+
+\subsection{三维点云结果分析}
+
+在 S3DIS 数据集上，本文方法在两种类别顺序设定下都取得了较强结果。在 $S^0$ 划分下，8-1、10-1 和 12-1 三种配置的总体 mIoU 分别达到 41.66\%、42.67\% 和 44.08\%；在 $S^1$ 划分下，对应结果进一步达到 43.40\%、43.04\% 和约 45\%。与微调方法和正则化方法相比，本文方法在旧类别保持和新类别吸收两个方面均有更平衡的表现。
+
+在更具挑战的 ScanNet 数据集上，本文方法同样优于现有增量方法。在 $S^0$ 划分下，15-1、17-1 和 19-1 配置的总体 mIoU 分别达到 26.97\%、27.98\% 和约 28\%；在 $S^1$ 划分下，也保持了 25\% 至 27\% 的总体性能。尽管点云任务本身较二维图像更困难，且场景几何结构复杂，但本文方法依然展现出良好的稳定性和可迁移性。
+
+总体来看，二维图像和三维点云实验共同说明：闭式解持续学习并不局限于传统分类任务，而能够推广到稠密预测问题；只要将编码器输出统一表示为位置级特征矩阵，就可以在第二章递归岭回归框架下完成统一求解。
+
+\subsection{消融实验分析}
+
+\begin{table}[htbp]
+    \centering
+    \caption{“本文方法”代表完整模型设置；“w/o RHL”表示模型不包含随机隐藏层（RHL）；“w/o Pseudo-Labeling”表示模型不使用伪标签机制。}
+    \begin{tabular}{lccc}
+        \toprule
+        设置 & 0 - 10 & 11 - 20 & 全部 \\
+        \midrule
+        本文方法 & \textbf{75.02} & \textbf{41.20} & \textbf{58.91} \\
+        无随机层 (w/o RHL) & 63.91 & 9.36 &  37.94 \\
+        无伪标签 (w/o Pseudo-Labeling) & 71.83 & 36.19 & 54.86 \\
+        \bottomrule
+    \end{tabular}
+    \label{tab:ablation}
+\end{table}
+
+
+为了进一步分析各模块作用，本文在 Pascal VOC2012 的 overlapped 10-1 设置下进行了消融实验。完整模型的旧类别、新类别和总体 mIoU 分别为 75.02\%、41.20\% 和 58.91\%。
+
+去除随机初始化隐藏层后，模型总体 mIoU 降至 37.94\%，其中新类别 mIoU 仅为 9.36\%。该结果说明，若仅冻结编码器并直接使用线性分类头，模型在学习新类别时缺乏足够可塑性，高维随机映射对增强线性可分性具有决定性作用。
+
+去除伪标签机制后，模型总体 mIoU 降至 54.86\%，旧类别与新类别结果均有明显下降。该现象说明，即使采用闭式解更新避免了梯度遗忘，若训练标签本身受到背景语义污染，模型仍会因监督信号偏移而产生性能退化。因此，伪标签机制是解决语义漂移不可或缺的一环。
+
+\subsection{效率分析}
+
+
+\begin{table}[htbp]
+\caption{训练时间与 GPU 显存消耗对比，微调方法在 Pascal VOC2012 数据集上训练 10 个 epoch。}
+
+\centering
+    \resizebox{\linewidth}{!}{
+\begin{tabular}{lcccc}
+\toprule
+\textbf{方法}     & \textbf{单轮 epoch 时间} & \textbf{总时间} & \textbf{GPU 显存} & \textbf{Batch Size} \\
+\midrule
+微调 (FT)          & 64.39 s                  & 651.46 s                           & 59.55 GB                     & 32                      \\
+本文方法 (Ours) & 43.25 s                 & 43.25 s                             & 51.61 GB                     & 64                      \\
+\bottomrule
+\end{tabular}}
+\label{tab:performance_comparison}
+\end{table}
+
+与传统微调方法相比，本文方法在增量阶段只需一次前向特征提取和一次闭式解更新，因此具有明显效率优势。实验结果表明，在 Pascal VOC2012 数据集上，常规微调方法进行 10 个 epoch 训练总耗时为 651.46 秒，而本文方法仅需单个 epoch、总耗时 43.25 秒，实现了约 15 倍的加速。同时，本文方法支持更大的批量大小，并降低了显存消耗。
+
+这一结果说明，闭式解方法不仅在精度上能够有效缓解持续学习中的遗忘问题，在工程效率上也具备显著优势。对于需要频繁接收新类别、快速完成模型更新的场景，如边缘视觉设备、在线场景解析和机器人感知系统，这种单次扫描式增量学习具有较高实际应用价值。
+
+\section{本章小结}
+
+本章研究了闭式解持续学习在语义分割任务中的实现方法，提出了面向二维图像与三维点云的统一框架。该方法以冻结编码器和解析分类头为基础，通过随机高维映射增强新类别可分性，并利用针对二维图像和三维点云设计的伪标签机制缓解语义漂移。实验结果表明，本文方法在 Pascal VOC2012、S3DIS 和 ScanNet 上均取得了优于现有方法的性能，同时显著降低了增量阶段训练时间。由此可见，第二章提出的递归岭回归闭式解框架不仅具有严格理论基础，也能够有效支撑复杂稠密预测任务的持续学习。
+

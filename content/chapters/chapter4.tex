@@ -1,0 +1,384 @@
+%!TEX root = ../../csuthesis_main.tex
+\chapter{面向多场景持续学习的闭式求解算法应用}
+
+第三章构建了递归岭回归闭式解的统一数学基础，给出了仅借助上一阶段统计量与当前阶段样本就能完成更新的递推公式，并证实其与联合训练解析解严格等价。本章将在该理论之上，针对四类典型的持续学习任务给出对应的应用方法。4.1 节围绕医学图像疾病分类展开，处置临床场景中类别持续扩展与隐私约束同时存有的问题；4.2 节转入时间序列分类，应对时序数据里的类内变化对持续学习所带来的额外挑战；4.3 节讨论语义分割，把闭式解从图像级分类推广到二维图像与三维点云的稠密预测，缓解类增量分割中的语义漂移问题；4.4 节落到多模态大语言模型专家路由这一应用上，把闭式解扩展到多专家的路由问题。这四类应用方法之间共享统一记号、统一推导与统一更新公式，差异主要映射在编码器选择、特征表示构造以及监督信号设计上。各节方法的相关研究成果已经整理为对应的论文，并在节首脚注中给出标注。
+
+\section[基于闭式求解的医学影像疾病分类]{基于闭式求解的医学影像疾病分类\footnote{本节工作发表在 IEEE International Conference on Acoustics, Speech and Signal Processing（ICASSP，CCF-B），论文题为``AIDC: Benchmark for Analytical Learning in Incremental Disease Classification''。}}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.80\textwidth]{images/aidc-overview.pdf}
+    \caption{闭式解持续学习方法在医学图像疾病分类中的三个主要组成部分：(a) 基于反向传播（Back-Propagation, BP）的训练，使用主干网络和 Softmax 分类器做多轮训练；(b) 基于解析学习的第一节段重对齐，把原分类器替换为解析分类器并与主干网络对齐，其中缓冲层是高维扩展层，通过最小二乘计算并保存特征的最优解；(c) 和 (d) 基于闭式解的持续学习，借助第三章的递归岭回归闭式解（算法~\ref{alg:cfcl}）来更新解析分类头，本节将其简称为 C-RLS（Concatenated Recursive Least Squares）。}
+    \label{fig:aidc_overview}
+\end{figure}
+
+\subsection{场景特点与方法适配}
+
+医学图像疾病分类的持续学习可看作类别增量学习在临床视觉任务上的具体落地。设第 $t$ 个增量学习阶段的医学图像数据集为
+\begin{equation}
+\mathcal{D}_t=\left\{\mathbf{X}_t,\mathbf{Y}_t\right\},
+\end{equation}
+其中 $\mathbf{X}_t \in \mathbb{R}^{N_t \times C \times H \times W}$ 是输入的医学图像张量，$N_t$ 为样本数量，$C$、$H$、$W$ 分别为图像的通道数、高度和宽度；$\mathbf{Y}_t$ 为对应的独热编码真值矩阵。与一般视觉分类任务相比，医学图像持续学习主要呈现以下三个特点。
+
+第一是隐私约束更强。无论病理图像、血液细胞图像还是器官组织切片，都有可能携带敏感的个人健康信息，故而直接保存历史样本用于回放往往会受到较大限制。
+
+第二是类别扩展更频繁。伴随临床知识更新和采集范围扩大，新疾病亚型、新病程阶段乃至新的采集模态会陆续加入已有系统，要求模型具备较好的长期可扩展性。
+
+第三是样本分布更不平衡。医学数据中不同疾病的发生频率往往相差悬殊，少数类和难分类常常同时浮现，这会进一步放大增量学习中的类别偏置问题。
+
+以上三点正好符合第三章递归岭回归闭式解的特点：闭式解只需要统计量而不需要查看任何历史样本，自然可以解决医学数据隐私的问题；其递归更新公式可以在有新的疾病亚型时进行有效的增量更新，不需要再次训练之前的所有类别，正好对应类别频繁增”的情况；保存的相关统计量从理论上来看与联合训练的效果一样，对于类别不平衡造成的判别边界的变化具有良好的鲁棒性。因此本章就直接以第三章的方法为基础，给出一种用于医学图像疾病的解析类增量学习的方法。
+
+\subsection{总体框架}
+
+如图~\ref{fig:aidc_overview} 所示，本节的方法包括基础编码器训练、对齐以及解析持续学习三个部分。在该任务上它也分为三步进行。
+
+第一阶段是基础编码器训练。模型在初始任务上以常规监督学习的方式训练特征提取网络，使其获得可迁移的表征能力。
+
+第二阶段是解析对齐，在完成训练后用原来的软最大分类头替换为解析分类头并利用最小二乘或者岭回归将编码器输出与标签空间进行对齐从而获得闭式解分类器。
+
+第三阶段是解析持续学习，在有新的任务出现时，将编码器固定住，只用当前的任务特征以及上一步得到的统计量进行分类头更新的操作，不再用反向传播的方法对分类器多次优化，这个过程与第三章中的递归岭回归是相同的，因此可以得到一样的结果。即本部分使用第三章中的定理~\ref{thm:closed_form_recursive}。
+
+这样设计使得闭式解持续学习方法比传统的增量学习方法具有两个显著优势：一个方面是由于历史知识是以统计量的形式被明确地存储而不需要通过梯度约束或者样本回放进行隐式的记忆因此其遗忘程度更低；另一个方面是在增量过程中一般只需要一次遍历现有数据集即可实现更新从而更快。
+
+\section[基于闭式求解的时间序列分类]{基于闭式求解的时间序列分类\footnote{本节工作发表在 Knowledge-Based Systems（KBS）期刊审稿中，论文题为``TS-ACL: Closed-Form Solution for Time Series-oriented Continual Learning''。}}
+
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=1.0\linewidth]{images/tsacl-overview.pdf}
+    \caption{所提 TS-ACL 方法总体框架。(a) 先在任务 1 上通过基于梯度下降的训练得到预训练编码器；(b) 接着在分类头前面引入带随机隐藏层模块，用以增强特征维度；(c) 最后在跨任务过程中使用递归岭回归学习机制。}
+  \label{fig:tsacl_overview}
+\end{figure}
+
+\subsection{场景特点与方法适配}
+
+时间序列样本一般是在时间维度上由多个通道传感器连续获取得到，在健康监护、工业设备故障检测、人机交互以及行为分类等领域都有大量应用。用表示第$t$个时间序列增量学习任务数据集为
+\begin{equation}
+\mathcal{D}_t=\left\{\mathbf{X}_t,\mathbf{Y}_t\right\},
+\end{equation}
+其中 $\mathbf{X}_t \in \mathbb{R}^{N_t \times c \times l}$ 是输入时间序列张量，$c$ 为通道数，$l$ 为时间长度，$\mathbf{Y}_t$ 则是独热编码真值矩阵。各任务的类别集合互不交叠，模型完成第 $t$ 个任务的学习之后，需要对所有已经见过的类别做统一分类。
+
+时间序列持续学习除了灾难性遗忘之外，还有一个更突出的特点——类内变化明显：同一类别在不同个体、不同设备甚至不同环境下都可能呈现出截然不同的动态模式。例如，同一种行为在不同人的传感器数据中可能展现出不同的节奏、幅值与局部形状；同一种手势在不同佩戴方式下也可能表现出不同的时间结构。这就意味着模型既要学习不同类别之间的差异，也要建模类别内部的多样性。
+
+由于这种特点，传统的基于少量回放样本的方式具有不可避免缺陷：当类内的变化比较丰富时，规模较小的缓存不能包含所有的变化情况。而第三节提出的递归岭回归闭式解正好适合这种情况——解析分类头部利用权重统计量学习类内分布，无需在缓存中存储数据就可以学到整个类内的变化情况；新的类别出现只需进行一次解析的更新即可增加一个判别子空间，防止遗漏类内多样性。本节就在这个基础上结合时间序列的特点加入多尺度特征融合以及随机高维映射来提高对局部波动性和长程依赖性的建模能力。
+
+\subsection{总体框架}
+
+如图~\ref{fig:tsacl_overview}所示，本文提出的方案可以分为预训练编码器、随机高维映射以及递归岭回归学习三个部分。针对时间序列内部差异较大，在固定编码器后鲁棒性有限的问题，在第三章的基础上提出了三个改进措施：多尺度特征聚合（既包括浅层局部波形也包括深层语义信息）、随机高维映射（提高解析分类头线性可分性）和集成扩展（进一步提高性能），都旨在实现稳定性和灵活性并存。
+
+这个框架整体上与第三章相同，仍然采用先训练编码器，在此基础上固定编码器然后不断迭代解析分类头的方式进行。不同之处在于为了更好地捕捉时间序列中的局部信息以及长距离依赖，在提取特征时加入了多尺度特征融合的方法。
+
+具体地，先在第一个任务上训练一维卷积编码器，让其获得基础的时序表示能力。训练完成之后冻结编码器参数。对单个输入样本 $\mathbf{X}^{n}$，把编码器第 $k$ 层的输出特征记为 $\mathbf{X}^{\mathrm{feat},k,n}=f_k(\mathbf{X}^{n})$，并把同一任务内所有样本在该层的特征沿样本维度堆叠成矩阵 $\mathbf{X}_t^{\mathrm{feat},k}$。不同层的特征映射的是不同时间尺度的信息：浅层更倾向于局部波形模式，深层则更倾向于全局语义表征。旨在强化后续解析分类头的表示能力，本节并不只用最终层特征，而是把多层特征拼接起来，得到
+\begin{equation}
+\mathbf{X}_t^{\mathrm{stack}} = \mathrm{Concat}\left(\mathbf{X}_t^{\mathrm{feat},1}, \ldots, \mathbf{X}_t^{\mathrm{feat},K}\right).
+\label{eq:ts_stack}
+\end{equation}
+
+在此基础上，再借助随机初始化的隐藏层做一次高维映射：
+\begin{equation}
+\mathbf{X}_t^{E}=\mathrm{ReLU}(\mathbf{X}_t^{\mathrm{stack}}\mathbf{R}^E),
+\label{eq:ts_rhl}
+\end{equation}
+式中 $\mathbf{R}^E\in\mathbb{R}^{d\times d_E}$ 为随机初始化矩阵，$d_E$ 为高维映射的维度（也就是随机隐藏层宽度），$\mathbf{X}_t^E$ 即为输入解析分类头的高维数据表示。最后，再用第三章的递归岭回归闭式解去更新分类头参数，由此达成对新类别的快速吸收。
+
+\subsection{集成扩展}
+
+为了更好地提高对于类内变化鲁棒性，在此把该方法推广到集成形式，记为 TS-ACL-E。其核心思想是借助随机隐藏层本身的随机性来构造多个相互独立的高维特征空间，保持预训练编码器、多尺度特征拼接以及递归岭回归更新方式都不变，只对随机隐藏层使用不同的随机种子做多次独立初始化，由此得到一组结构相同但映射方式各异的随机映射矩阵 $\{\mathbf{R}^{E,1},\mathbf{R}^{E,2},\ldots,\mathbf{R}^{E,M}\}$。每一份随机初始化对应一个独立的解析分类头，并按照前述递推方式在所有任务上分别完成增量更新，最终得到 $M$ 个并列的解析分类器。
+
+对于一个单独测试样本 $\mathbf{x}^{\mathrm{test}}$ 来说，先由各个解析分类头独立给出其在类别 $c$ 上的预测得分，然后使用softmax将其转化为概率 $P_i(c\mid \mathbf{x}^{\mathrm{test}})$，其中 $i\in\{1,\ldots,M\}$ 是分类器编号；之后对所有分类器计算它们的概率求和并取其最大值所对应的类别即为预测结果。
+\begin{equation}
+\hat{y}=\arg\max_{c}\frac{1}{M}\sum_{i=1}^{M}P_i(c\mid \mathbf{x}^{\mathrm{test}}).
+\label{eq:tsacl_ensemble}
+\end{equation}
+由于各分类头共享同一冻结编码器与同样的递归岭回归更新规则，因此整体计算开销仅以倍数形式随 $M$ 线性增加，并不会引入额外的反向传播；同时不同随机种子下的高维映射相当于对解析分类头的判别空间做了多视角投影，使其更不容易被某一个特定的随机方向所主导。这种集成扩展能够在不改变主体结构的前提下进一步增强模型对类内多样性的鲁棒性，尤其适用于子模式分布较为丰富的时间序列数据集。
+
+\subsection{闭式解为何适合时间序列}
+
+时间序列类内变化问题可以看成是从分布学习角度出发考虑。将同一类别的样本视为由许多不同的个体或者子模式所构成，则真实的分布一般由几个子簇组成。由于样本数量有限，在此情况下可能不足以包含所有的子簇；而闭式解方法是通过对所有已知样本进行统计计算求得最佳结果，因此有利于获得整个分布的信息。
+
+从理论上说，第三章所提出的递归更新结果与联合训练是等价的。而这意味着，在编码器特征足够稳健的情况下，解析分类头就可以在不查阅过往样本的情况下达到查看所有过往样本之后的决策边界。而对于时间序列问题来说，这一点很重要，因为在其中模型可以通过保存历史统计量的方式来保存类别内部的变化而不是通过有限数量的回放样本来近似这些变化。
+
+另一方面，冻结编码器会降低模型学习新类别能力，在此我们采用三种方法加以改进：第一是随机高维映射，通过增加特征线性可分性从而提高解析分类头灵活性；第二是多尺度特征融合，结合浅层与深层特征以更好地保持局部时序形态以及整体语义信息；第三是集成扩展，借助不同随机种子初始化的随机隐藏层得到多个并列的解析分类头从判别空间多样性的角度进一步增强对类内多样性的鲁棒性。
+
+\section[基于闭式求解的语义分割]{基于闭式求解的语义分割\footnote{本节工作发表在 ACM International Conference on Multimedia（ACM Multimedia / ACM MM，CCF-A），论文题为``CFSSeg: Closed-Form Solution for Class-Incremental Semantic Segmentation of 2D Images and 3D Point Clouds''。}}
+
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=1\linewidth]{images/cfsseg-overview.pdf}
+    \caption{所提方法 CFSSeg 的总体框架。第 $t$ 步中，模型借助第 $t-1$ 步的模型通过伪标签机制生成伪标签，并与真实标签融合形成混合标签。模型继承第 $t-1$ 步学到的分类头 $\widehat{\Phi}_{t-1}$，再结合混合标签、提取出的高维特征矩阵以及第 $t-1$ 步的 $\Psi_{t-1}$。随后使用第三章的递归岭回归闭式解算法做更新，得到 $\widehat{\Phi}_{t}$ 与 $\Psi_{t}$。}
+  \label{fig:cfsseg_overview}
+\end{figure}
+
+\subsection{场景特点与方法适配}
+
+语义分割任务在持续学习场景下展现出与图像级分类很不一样的特点。设输入样本既能够是二维图像，也可以是三维点云。第 $t$ 个增量阶段的输入空间记为
+\begin{equation}
+\mathbf{X}_t \in \mathbb{R}^{N_t \times C_{in}},
+\end{equation}
+式中 $N_t$ 是像素数或点数，$C_{in}$ 为输入通道维度。输出标签空间记为
+\begin{equation}
+\mathbf{Y}_t \in \mathcal{C}_t^{N_t},
+\end{equation}
+其中 $\mathcal{C}_t$ 是截至第 $t$ 阶段已经见过的类别集合，包含背景类 $c_b$。与分类任务不同的是，语义分割所预测的是每个位置的类别 logits（即 softmax 之前的未归一化得分），基于此模型的输出为
+\begin{equation}
+q_{\theta_t}(\mathbf{X}_t) \in \mathbb{R}^{N_t \times |\mathcal{C}_t|},
+\end{equation}
+最终分割结果由每个位置取最大响应类别得到。
+
+在类增量语义分割中，在第 $t$ 个时期引入一个新的类别集 $S_t$，并且在不同的时期引入的不同类别的集合不能有交集。根据训练注释的方式不同可以分为三类情况，这是本工作的第二个特点。
+
+第一种是顺序设定。该设定下当前阶段的数据同时包含旧类别和新类别的标注，故而增量学习的难度相对较低，但仍需要避免参数更新破坏已有类别的判别边界。
+
+第二种是不相交设定。该设定下当前阶段只显式标注新类别，旧类别在当前数据中被统一标为背景。由于旧类别并未真正消失，而是被错误地映射到背景类中，所以模型在增量训练之后容易把旧类别的语义吸收进背景，进而催生语义漂移。
+
+第三种是重叠设定，在此背景下，背景标签不仅有可能是真实的背景，还可能是旧类别的甚至是还没有出现的新类别的表示方式，因此相比于互斥设定更加困难，模型需要学习新的类别同时又不能把背景中的旧的知识全部抹去。
+
+除了标注方式差异之外，与传统基于梯度的持续学习方法相比，语义分割任务的持续学习还在以下三个方面表现得更为突出：稠密预测带来的稳定性与可塑性矛盾更尖锐、像素级或点级反向传播的计算成本更大、背景标签语义不稳定引致的语义漂移更难应对。这构成本场景的第二个特点。
+
+根据以上特性，第三章提出的递归岭回归闭式解可以很好地解决这些问题：将稠密预测位置级别特征作为线性回归输入后，分类头更新即变为求解过程，从而不需要在每个像素或者每个点上进行一次反向传播，这与计算开销大的问题相对应；闭式解的递归形式也相当于联合训练，所以分类边界的确定只与累计统计数据有关而与梯度的方向无关，在不断更新的过程中仍然很鲁棒，这也符合稳定性和灵活性之间的矛盾突出。同时利用伪标签的方法用上一轮迭代得到的模型给背景像素重新打上标签，就可以恢复出之前由于被映射到背景而导致消失的旧类别的标注信息，从而减小了非交集以及重叠情况下出现的语义漂移，在此基础上我们提出一种适用于二维图像以及三维点云的一致闭式解持续语义分割方法。
+
+\subsection{总体框架}
+
+如图~\ref{fig:cfsseg_overview}所示，本文方法可分为冻结编码器、随机高维映射、递归岭回归闭式解更新分类头三个步骤，在此基础上利用伪标签重构之前被映射到背景的旧类别监督。其主要思想是将一个语义分割网络分为稳定编码器和递归解析分类头。即在第一阶段用标准有监督方式训练分割编码器得到最基本的视觉表示能力；从第二阶段开始就不再优化编码器参数，而是利用编码器提取出特征进行分类头的解析性更新。这是因为希望在持续学习过程中只允许分类头发生改变以防止其对先前学到的知识产生影响。
+
+但是，仅仅冻结编码器可以提高鲁棒性，但是会降低模型对新类别的灵活性，在此基础上为了解决这个问题，在分类头之前添加了一个随机初始化隐藏层，将编码器输出映射到一个更大的特征空间上，在高维空间里有更强的线性可分性，通过随机映射以及非线性激活后，旧类别与新类别一般更易被线性分类器区分，因此即使编码器不再更新，解析分类头仍然有较好的泛化能力。
+
+在这一基础上，在本节中直接用第三章递归岭回归闭式解来更新分类头。为了方便整个文章统一，用第$t$阶段编码器输出以及经过高维映射的数据集分别表示为
+\begin{equation}
+\mathbf{X}_t^{E} = \mathrm{ReLU}(\mathbf{X}_t^{\mathrm{encoder}}\mathbf{R}^E),
+\label{eq:cfsseg_e}
+\end{equation}
+式中 $\mathbf{X}_t^{\mathrm{encoder}}$ 为冻结编码器所提取的位置级特征，$\mathbf{R}^E$ 为随机初始化的映射矩阵。这样一来，语义分割分类头的更新就能直接套用式(\ref{eq:phi_recursive_final})，只需要把该式中的数据矩阵换成 $\mathbf{X}_t^{E}$，也就是仅借助上一阶段的统计量与当前阶段的样本完成递推，并不需要访问任何历史原始数据。
+
+\subsection{二维图像与三维点云统一建模}
+
+本节方法对二维图像与三维点云都适用，其统一性可从以下三个层面来体会。
+
+第一，在输入形式上：虽然二维图像用规则网格表达、三维点云用无序点集表达，但是通过编码器处理后两者都可以转化为位置级别的特征集，因此都可以表示为矩阵形式进入高维映射层。
+
+其次是在学习目标方面：这两种任务都可以看成是对位置级特征进行类别分配的问题，因此都可以认为是对位置样本进行多类线性回归或者线性判别，正好可以用岭回归闭式解来学习解析分类头。
+
+最后在持续学习更新方式方面：不管是像素级预测还是点级预测，分类头的增量更新都可以归结为第三章中给出的逆自相关矩阵$\Psi_t$以及权重矩阵$\widehat{\Phi}_t$的递推过程。也就是说，不同的模态只在于它们所对应的编码器结构及伪标签生成的方法不同，但是增量更新的方式是一样的。
+
+从实现上看，在二维图像实验中使用DeepLabv3作为基本分割网络~\citep{chen2017deeplabv3}，骨干网络为ResNet-101~\citep{he2016resnet}；而在三维点云实验中采用DGCNN（动态图卷积神经网络）做为编码器~\citep{wang2019dgcnn}。两种类型的模型在开始阶段都是通过传统的有标签的数据进行预训练，在之后增量阶段都换成解析分类头更新方式。这样使得该方法在不同的模态下有相同的基本原理以及良好的工程可迁移性。
+
+\subsection{二维图像伪标签策略}
+
+在不相交和重叠设定下，当前阶段训练标签中可能有大量背景像素其实属于旧类别。如果直接把这些像素全部当作背景送入训练，那么虽说闭式解分类头不会因梯度更新而遗忘——但其回归目标本身已经发生偏移，依旧会使旧类别的语义向背景类塌缩。故而必须借助上一阶段的模型对背景像素做再判断。
+
+把第 $t-1$ 阶段模型在位置 $i$ 上的输出记为 $q_{\theta_{t-1}}(i,c)$（softmax/sigmoid 前的未归一化得分，即 logit），则该位置的不确定性定义为
+\begin{equation}
+U^{i} = 1 - \sigma\left(\max_c q_{\theta_{t-1}}(i,c)\right),
+\label{eq:2d_uncertainty}
+\end{equation}
+其中 $\sigma(\cdot)$ 是 Sigmoid 函数。式~\eqref{eq:2d_uncertainty} 首先将 logit 通过 sigmoid 映射到 $(0,1)$ 的范围，得到这个位置上最大的类别置信度，然后用"$1-$置信度"来表示不确定性大小，如果最大响应值越大，则说明原来的模型对于这个点是比较确定的，此时对应的位置不确定性就越小；否则就是该点处于真实的背景或者难以区分的地方。
+
+由此，二维图像的伪标签可定义为
+\begin{equation}
+\tilde{Y}_t^{i}=
+\begin{cases}
+Y_t^{i}, & Y_t^{i} \in S_t, \\
+Y_t^{i}, & (Y_t^{i}=c_b) \wedge (U^{i} > \tau), \\
+\hat{Y}_{t-1}^{i}, & (Y_t^{i}=c_b) \wedge (U^{i} \leq \tau),
+\end{cases}
+\label{eq:2d_pseudo}
+\end{equation}
+其中$\tau$是阈值，在新标签中将一个像素标记为背景的情况下，如果旧模型对该像素有较高的置信度，则用旧模型对该像素的分类结果来取代背景标签；而当旧模型对该像素缺乏信心时就维持它原来的背景标签。这种方法实际上是：在不需要任何先前的真实图像的情况下，在现有样本中发现潜在的老类别的监督信息从而解决语义漂移问题。
+
+\subsection{三维点云伪标签策略}
+
+对于三维点云而言，由于每一点周围都是稀疏点云，因此单点预测更易受到局部稀疏性以及邻域扰动的影响，在生成点云伪标签的同时考虑邻域信息。对于点 $i$，首先根据其空间位置找到其最近的 $K$ 个邻居，然后根据它们的空间位置确定邻域权重 $w_k$，最后利用上一步获得模型预测值以及邻域加权分布估计出该点的不确定性，本文使用一种基于空间不确定性度量方法可以表示为
+\begin{equation}
+\begin{aligned}
+U^{i} = &- \sum_c \left[\frac{1}{K}\sum_k q_{t-1}(i,c)w_k\right]
+\log\left[\frac{1}{K}\sum_k q_{t-1}(i,c)w_k\right] \\
+&+ \frac{1}{K}\sum_{c,k} \left(q_{t-1}(i,c)w_k\right)
+\log\left(q_{t-1}(i,c)w_k\right).
+\end{aligned}
+\label{eq:3d_uncertainty}
+\end{equation}
+
+相应地，点云伪标签的规则为
+\begin{equation}
+\tilde{Y}_t^{i}=
+\begin{cases}
+Y_t^{i}, & Y_t^{i} \in S_t, \\
+\hat{Y}_{t-1}^{i}, & (Y_t^{i}=c_b) \wedge (\hat{Y}_{t-1}^{i} \neq c_b) \wedge (U^{i} \leq \tau), \\
+\hat{Y}_{t-1}^{i,k'}, & (Y_t^{i}=c_b) \wedge \big((\hat{Y}_{t-1}^{i}=c_b) \vee (U^{i} > \tau)\big), \\
+c_b, & \text{其他情况},
+\end{cases}
+\label{eq:3d_pseudo}
+\end{equation}
+式中 $\hat{Y}_{t-1}^{i,k'}$ 指代那些契合非背景且不确定性较低条件的近邻点预测类别。相比二维策略，三维点云方法不单顾及当前点自身的预测，还把邻域空间结构纳入顾及，由此更适合应对点云的局部稀疏性和几何连续性问题。
+
+\section[基于闭式求解的多模态大语言模型专家路由]{基于闭式求解的多模态大语言模型专家路由\footnote{本节工作发表在 International Conference on Learning Representations Workshop（ICLR Workshop），论文题为``CF-Router: Closed-Form Solution for Expert Selection in Multimodal Agent Lifelong Learning''。}}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=1.0\textwidth]{images/cfrouter-overview.pdf}
+    \caption{CF-Router 框架概览。上图：终身学习场景，涵盖遥感、医疗、自动驾驶、科学以及金融等不同领域任务，它们按时间顺序依次到达，每个领域都有自己的视觉问答数据（改编自 \citet{zhao2025mllm}）。下图：CF-Router 架构。多模态输入 $\mathbf{x}$（图像与问题）由冻结的多模态大语言模型主干 $f_{\theta}$ 处理，生成隐藏状态序列 $\mathbf{X}_{\mathrm{seq}} \in \mathbb{R}^{L \times D}$。平均池化将序列压缩为固定大小的特征 $\mathbf{X}_{\mathrm{feat}} \in \mathbb{R}^{D}$。在训练期间，CF-Router 增量累积自相关矩阵 $\mathbf{G} = \sum \mathbf{X}_{\mathrm{feat}}^{\top}\mathbf{X}_{\mathrm{feat}}$ 与互相关矩阵 $\mathbf{Q} = \sum \mathbf{X}_{\mathrm{feat}}^{\top}\mathbf{Y}$，接着解析地计算路由头 $\widehat{\Phi}_t = (\mathbf{G} + \gamma\mathbf{I})^{-1}\mathbf{Q}$，整个过程不需要任何梯度下降。在推理期间，计算路由得分 $\mathbf{s} = \mathbf{X}_{\mathrm{feat}}^{\mathrm{test}}\widehat{\Phi}_t$，再从专家池中挑出得分最高的专家 $k^* = \arg\max_k s_k$。被选中的 LoRA 专家 $E_{k^*}$ 与冻结主干合并以生成最终响应。这一设计既是基于解析解的（路由无需反向传播），又是无回放的（不存储任何先前任务的数据）。}
+    \label{fig:cfrouter_overview}
+\end{figure}
+
+\begin{algorithm}[t]
+\caption{基于 CF-Router 的终身学习（训练阶段）。本算法为统一框架（算法~\ref{alg:cfcl}）在专家路由场景下的具体实例化：累积统计量 $\mathbf{G}$ 与第三章的 $\Psi^{-1}$ 之间满足 $\mathbf{G}=\Psi^{-1}-\gamma\mathbf{I}$，互相关矩阵 $\mathbf{Q}$ 与第三章 $\mathbf{Q}_t$ 同义；最终路由头 $\widehat{\Phi}_t=(\mathbf{G}+\gamma\mathbf{I})^{-1}\mathbf{Q}=\Psi_t\mathbf{Q}_t$ 与定理~\ref{thm:closed_form_recursive} 给出的递推结果严格等价。}
+\label{alg:training}
+\begin{algorithmic}[1]
+\REQUIRE 任务序列 $\mathcal{T} = \{1, \dots, T\}$
+\REQUIRE 冻结的多模态大语言模型主干 $f_\theta$
+\REQUIRE 正则化系数 $\gamma$，用于自相关矩阵 $\mathbf{G}$ 与互相关矩阵 $\mathbf{Q}$ 的缓冲区
+\FOR{每个任务 $t \in \mathcal{T}$ 及其数据集 $\mathcal{D}_t$}
+    \STATE \textbf{初始化} 新的 LoRA 专家 $E_t$
+    \STATE \COMMENT{阶段 1：训练路由头}
+    \FOR{$\mathcal{D}_t$ 中的每个批次 $(\mathbf{x}, \mathbf{y})$}
+        \STATE 提取最后一层隐藏状态： $\mathbf{X}_{\mathrm{seq}} = f_\theta(\mathbf{x})$
+        \STATE 平均池化： $\mathbf{X}_{\mathrm{feat}} = \frac{1}{L}\sum_{i=1}^{L}\mathbf{X}_{\mathrm{seq},i}$
+        \STATE 构建任务 $t$ 的独热编码专家编号目标 $\mathbf{Y}$
+        \STATE 更新自相关矩阵： $\mathbf{G} \leftarrow \mathbf{G} + \mathbf{X}_{\mathrm{feat}}^{\top}\mathbf{X}_{\mathrm{feat}}$
+        \STATE 更新互相关矩阵： $\mathbf{Q} \leftarrow \mathbf{Q} + \mathbf{X}_{\mathrm{feat}}^{\top}\mathbf{Y}$
+    \ENDFOR
+
+    \STATE \COMMENT{阶段 2：训练专家}
+    \FOR{$\mathcal{D}_t$ 中的每个批次 $(\mathbf{x}, \mathbf{y})$}
+        \STATE 专家 $E_t$ 前向传播： $\hat{\mathbf{y}} = f_{\theta, E_t}(\mathbf{x})$
+        \STATE 计算大模型损失： $\mathcal{L} = \text{CrossEntropy}(\hat{\mathbf{y}}, \mathbf{y})$
+        \STATE 通过反向传播更新 $E_t$ （让 $f_\theta$ 保持冻结）
+    \ENDFOR
+
+    \STATE \COMMENT{阶段 3：解析更新路由头}
+    \STATE $\widehat{\Phi}_t = (\mathbf{G} + \gamma \mathbf{I})^{-1} \mathbf{Q}$
+    \STATE 存储/冻结 专家 $E_t$
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{CF-Router 推理过程}
+\label{alg:inference}
+\begin{algorithmic}[1]
+\REQUIRE 测试样本 $\mathbf{x}^{\mathrm{test}}$
+\REQUIRE 冻结的多模态大语言模型 $f_\theta$，路由头 $\widehat{\Phi}_t$
+\REQUIRE 专家池 $\mathcal{E} = \{E_1, \dots, E_T\}$
+
+\STATE \COMMENT{步骤 1：路由决策}
+\STATE 提取最后一层隐藏状态： $\mathbf{X}_{\mathrm{seq}}^{\mathrm{test}} = f_\theta(\mathbf{x}^{\mathrm{test}})$
+\STATE 平均池化： $\mathbf{X}_{\mathrm{feat}}^{\mathrm{test}} = \frac{1}{L}\sum_{i=1}^{L}\mathbf{X}_{\mathrm{seq},i}^{\mathrm{test}}$
+\STATE 计算得分： $\mathbf{s} = \mathbf{X}_{\mathrm{feat}}^{\mathrm{test}} \widehat{\Phi}_t$
+\STATE 选择专家索引： $k^* = \arg\max_{k} s_k$
+
+\STATE \COMMENT{步骤 2：生成}
+\STATE 激活 LoRA 专家 $E_{k^*}$
+\STATE 生成响应： $\mathbf{y}^{\mathrm{pred}} = f_{\theta, E_{k^*}}(\mathbf{x}^{\mathrm{test}})$
+\RETURN $\mathbf{y}^{\mathrm{pred}}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{场景特点与方法适配}
+
+在多模态大语言模型持续学习中，专家路由任务相比于上面介绍的分类、回归及分割等任务有它特殊的应用背景，在实践中一般采用共享主干和任务专家的形式进行设计。将主干部分表示为$f_\theta$，并且在整个持续学习中保持不变；而对于第$t$个特定任务，则使用相应的轻量级专家模块$E_t$。在训练时只需更新当前任务所对应专家的参数，在测试时需要一个路由器根据输入$\mathbf{X}$选择最合适的专家。
+
+把全部任务集合记为 $\mathcal{T}=\{1,2,\ldots,T\}$，那么路由器本质上要学习的就是一个从输入到任务编号的映射：
+\begin{equation}
+g: \mathbf{X} \rightarrow \{1,2,\ldots,T\}.
+\end{equation}
+这一映射看上去简单，但在多模态终身学习场景中却展现出以下两个突出特点。
+
+第一是特征空间高度复杂。图像、文本以及跨模态对齐信息共同决定任务分布，简单的相似度方法很难稳定地划分不同领域的边界。
+
+第二是路由器自身也需要持续学习。一旦新任务持续到来，传统基于梯度训练的路由器自身也会浮现遗忘和重训练问题，这与本章前几节所讨论的持续学习矛盾在本质上是相同的；加之路由器一旦选错专家，即使专家本身完好，最终的响应也会失败，所以路由器的稳定性对整套系统的表现具有近乎决定性的影响。
+
+根据以上特点，在第三章中递归岭回归闭式解正好满足需求：由于路由问题是数学意义上可以认为是从特征到专家编号的解析分类问题，因此主干输出的最后一层隐藏状态就可以作为高判别力的语义特征馈送到解析路由头；当有新的任务加入时只需要按照第三章给出的递推公式进行增量更新即可，无需对整个路由网络进行再训练，也无须重播之前的所有多模态数据集，从而实现稳定性和可伸缩性的兼顾。而本文提出方法正是基于此思想进行设计，即CF-Router方法。
+
+\subsection{总体框架}
+
+如图~\ref{fig:cfrouter_overview} 所示，本节方法能够概括为多模态语义特征提取、路由头解析更新与专家训练、基于路由的推理三个阶段。CF-Router 在第三章统一框架的基础上，把专家路由的整体流程组织成三个阶段，并按算法~\ref{alg:training} 与算法~\ref{alg:inference} 所给出的训练与推理过程做具体落地。
+
+第一阶段是多模态语义特征提取。冻结的多模态大语言模型主干 $f_{\theta}$ 接收图文混合输入并输出最后一层的隐藏状态序列，再经过平均池化得到一个固定维度的语义特征向量，作为解析路由头的输入；该阶段并不引入任何可学习参数，对应算法~\ref{alg:training} 中的特征抽取步骤。
+
+第二阶段是路由头解析更新与专家训练。对当前任务 $t$ 的每个批次，先把池化得到的特征累积到自相关矩阵 $\mathbf{G}^{t}=\sum_{i\le t}\mathbf{X}_i^{\top}\mathbf{X}_i$ 与互相关矩阵 $\mathbf{Q}^{t}=\sum_{i\le t}\mathbf{X}_i^{\top}\mathbf{Y}_i$ 中（与第三章 $\mathbf{Q}_t$ 同义）；当前任务全部遍历完毕后，按 $\widehat{\Phi}_t=(\mathbf{G}^{t}+\gamma\mathbf{I})^{-1}\mathbf{Q}^{t}$ 求出新的路由分类头的参数。然后与此同时再继续针对当前任务初始化并训练相应的低秩适配专家(LoRA) $E_t$，主干网络冻结就好了。
+
+第三阶段是基于路由的推理。给定测试样本，先按照第一阶段的方式抽取语义特征，接着用最新的路由头计算各专家的得分，并取最大值得到专家编号 $k^{*}$，最后激活相应的 LoRA 专家与冻结主干合并起来生成响应。整个流程在新任务接入时仅增多一次解析更新和一次专家训练，既不需要回放任何历史多模态样本，也不需要重训路由器，因而天然支持长期增量。
+
+\subsection{多模态隐藏状态特征提取}
+
+对单个多模态输入样本 $\mathbf{X}^{n}$ 而言，冻结的多模态大语言模型主干会先生成最后一层的隐藏状态矩阵：
+\begin{equation}
+\mathbf{X}_{\mathrm{seq}}^{n} \in \mathbb{R}^{L \times D},
+\end{equation}
+式中 $L$ 是序列长度，$D$ 是隐藏维度。旨在得到一个可供解析分类头使用的固定长度表示，本节对序列维度做平均池化：
+\begin{equation}
+\mathbf{X}_{\mathrm{feat}}^{n}=\frac{1}{L}\sum_{i=1}^{L}\mathbf{X}_{\mathrm{seq},i}^{n},
+\label{eq:cfrouter_pool}
+\end{equation}
+其中 $\mathbf{X}_{\mathrm{feat}}^{n} \in \mathbb{R}^{D}$。这一向量能够视为当前多模态输入的语义表示，综合映射了图像内容、文本指令以及跨模态上下文信息。
+
+与那些直接使用人工定义相似度度量的做法不同，最后一层隐藏状态是经过多模态大语言模型深层交互之后得到的高层语义表示，基于此对任务领域具备更强的判别能力。本节正是借助这一点，把专家路由问题转化为对隐藏状态特征的解析分类。
+
+\subsection{专家选择头的闭式解更新}
+
+在第三章统一记号下，把第 $t$ 个增量阶段提取到的多模态语义特征矩阵记为
+\begin{equation}
+\mathbf{X}_t=\begin{bmatrix}
+\mathbf{X}_{\mathrm{feat}}^{1} \\
+\mathbf{X}_{\mathrm{feat}}^{2} \\
+\vdots \\
+\mathbf{X}_{\mathrm{feat}}^{N_t}
+\end{bmatrix}
+\in \mathbb{R}^{N_t \times D},
+\end{equation}
+对应的专家编号独热编码真值记为 $\mathbf{Y}_t \in \mathbb{R}^{N_t \times d_{C_t}}$，那么其中 $d_{C_t}$ 是截至第 $t$ 阶段累计的专家数。继续沿用第三章的记号，将路由分类头记作解析分类头 $\widehat{\Phi}_t$，其在联合训练条件下由带正则项的最小二乘问题可以得到：
+\begin{equation}
+\widehat{\Phi}_t=
+\arg\min_{\widehat{\Phi}}
+\left\|\mathbf{X}_{1:t}\widehat{\Phi}-\mathbf{Y}_{1:t}\right\|_F^2
++\gamma\left\|\widehat{\Phi}\right\|_F^2,
+\end{equation}
+对应的闭式解为
+\begin{equation}
+\widehat{\Phi}_t=
+\left(\mathbf{X}_{1:t}^{\top}\mathbf{X}_{1:t}+\gamma \mathbf{I}\right)^{-1}
+\mathbf{X}_{1:t}^{\top}\mathbf{Y}_{1:t}.
+\label{eq:cfrouter_closed}
+\end{equation}
+
+式(\ref{eq:cfrouter_closed})对应的就是多模态专家路由场景——标签由语义类别换成了专家编号，本质上依旧是一个解析可解的多类判别问题。
+
+进一步地，本节直接继承第三章的递归更新方式，维护逆自相关矩阵
+\begin{equation}
+\Psi_t=\left(\Psi_{t-1}^{-1}+\mathbf{X}_t^{\top}\mathbf{X}_t\right)^{-1}.
+\label{eq:cfrouter_psi}
+\end{equation}
+就专家路由任务而言，第 $t$ 阶段一般只会引入新的专家编号监督，所以式(\ref{eq:phi_recursive_final})中的旧类别监督项 $\bar{\mathbf{Y}}_t$ 通常为零矩阵。由此，路由头的递推更新可写成
+\begin{equation}
+\widehat{\Phi}_t=
+\begin{bmatrix}
+\widehat{\Phi}_{t-1}-\Psi_t\mathbf{X}_t^{\top}\mathbf{X}_t\widehat{\Phi}_{t-1}
+&
+\Psi_t\mathbf{X}_t^{\top}\tilde{\mathbf{Y}}_t
+\end{bmatrix},
+\label{eq:cfrouter_update}
+\end{equation}
+其中 $\tilde{\mathbf{Y}}_t$ 是当前阶段新增专家所对应的真值子矩阵。若当前阶段同时包含对旧专家的监督，则能够直接运用第三章更一般的递推形式，把 $\bar{\mathbf{Y}}_t$ 一并纳入更新即可。
+
+当然也可以把上述递推理解为对二阶统计量的持续维护：
+\begin{equation}
+\mathbf{G}^{t}=\sum_{i=1}^{t}\mathbf{X}_i^{\top}\mathbf{X}_i,
+\qquad
+\mathbf{Q}^{t}=\sum_{i=1}^{t}\mathbf{X}_i^{\top}\mathbf{Y}_i,
+\end{equation}
+则 $\Psi_t=(\mathbf{G}^{t}+\gamma\mathbf{I})^{-1}$，并且 $\widehat{\Phi}_t=\Psi_t\mathbf{Q}^{t}$。
+
+\subsection{推理过程}
+
+推理阶段对测试输入样本 $\mathbf{X}^{\mathrm{test}}$ 的应对如下：先依托式(\ref{eq:cfrouter_pool})提取其语义表示 $\mathbf{X}_{\mathrm{feat}}^{\mathrm{test}}$，再用路由头计算所有专家的得分：
+\begin{equation}
+\mathbf{s}=\mathbf{X}_{\mathrm{feat}}^{\mathrm{test}}\widehat{\Phi}_t.
+\end{equation}
+最后挑出得分最高的专家编号：
+\begin{equation}
+k^*=\arg\max_k s_k.
+\end{equation}
+被选择的专家和冻结主干一起产生最终的回答。由于路由头本身是一种非常轻量级的线性结构，在推理过程中的开销相对于主干的前向传播可以忽略不计，因此这种方法具有很好的实时性。
+
+\section{本章小结}
+
+本章基于第三章统一数学框架下，分别针对四种常见持续学习问题提出相应解决方案，在医学图像疾病分类中利用基础编码器训练、解析对齐以及解析增量学习三个步骤实现适用于隐私敏感以及类别不断增多情况下的解析增量学习方法；在时间序列分类中使用多尺度特征融合、随机高维映射和集成扩展使得闭式解具有鲁棒性并且能够处理类内变化；在语义分割中将解析分类头从图像级分类推广到稠密预测的二维图像分割及稠密预测的三维点云分割，并通过不同的伪标签方式消除不相交或者重叠区域之间的语义漂移；在多模态大语言模型专家路由中采用主干最后一层隐藏状态表示语义信息并用闭式解方式进行专家选择头优化从而无需梯度计算也无需重放数据进行有效路由。所有上述应用场景都源于第三章统一推导。

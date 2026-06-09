@@ -1,0 +1,579 @@
+%!TEX root = ../../csuthesis_main.tex
+\chapter{实验结果与分析}
+
+本章从一个统一的实验环境出发对第四章针对四种不同任务提出的方法进行比较研究。具体来说，在5.1节中我们对医学图像疾病分类任务进行测试，在5.2节中我们对时间序列分类任务进行测试，在5.3节中我们对二维图像以及三维点云语义分割任务进行测试，在5.4节中我们对多模态大语言模型专家路由任务进行测试，在5.5节中是本章总结部分。每个任务都是先介绍该任务的数据集及设置，然后介绍所使用的评价指标以及所采用的基线方法，最后展示我们的方法与其他方法相比所取得的效果以及效率等。
+
+\section{医学图像疾病分类实验}
+
+\subsection{数据集与设置}
+
+为了系统地比较闭式解方法对于医学图像疾病分类的效果，在这里我们使用面向增量疾病分类的统一基准来进行实验研究。该基准从 MedMNIST v2~\citep{yang2023medmnist} 中选择了三个有代表性的多类疾病分类的数据集 BloodMNIST、PathMNIST 和 OrganAMNIST。为了让不同的持续学习的方法在一个相同的环境下进行比较，所有的图像都被调整到大小为 $28\times 28$。
+
+BloodMNIST 共有 8 个类别，其训练集、验证集与测试集规模分别是 11959、1712 和 3421；PathMNIST 共有 9 个类别，对应数据规模分别为 89996、10004 与 7180；OrganAMNIST 则有 11 个类别，训练集、验证集和测试集规模分别为 34561、6491 和 17778。出于构造类别增量学习流程，本节把三个数据集都划分成 4 个任务，并确保不同任务的类别两两不重叠。
+
+\begin{table}[!htbp]
+\centering
+\caption{MedMNIST 医学图像持续学习基准的数据划分与任务设置。本节遵循 MedMNIST 官方划分，并采用按任务划分类别（class-per-task）的持续学习设置，与已有研究~\citep{derakhshani2022lifelonger}保持一致。}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{lccccc}
+\toprule
+数据集 & 训练集 & 验证集 & 测试集 & 类别数 & 每任务类别 \\
+\midrule
+BloodMNIST  & 11,959 & 1,712 & 3,421 & 8  & [2, 2, 2, 2] \\
+OrganAMNIST & 34,561 & 6,491 & 17,778 & 11 & [3, 3, 3, 2] \\
+PathMNIST   & 89,996 & 10,004 & 7,180 & 9 & [3, 2, 2, 2] \\
+\bottomrule
+\end{tabular}
+\label{tab:medmnist_dataset}
+\end{table}
+
+\subsection{评价指标与对比方法}
+
+评价指标使用第2章2.6节定义的平均准确率（ACC，式(\ref{eq:metric_acc})）以及平均遗忘率（Forgetting，式(\ref{eq:metric_forget})），这两个指标分别对应持续学习中的可塑性与稳定性，能比较全面地映射模型表现。
+
+对比方法包含五类典型的持续学习基线：LwF~\citep{li2017learning}、iCaRL~\citep{rebuffi2017icarl}、EWC~\citep{kirkpatrick2017ewc}、MAS~\citep{aljundi2018memory} 与 EEIL~\citep{castro2018end}。同时把没有使用任何专门持续学习机制、只在当前任务上微调的 Naive 作为下界参考。所有方法都使用相同的骨干网络，高维映射维度 $d_E$ 设为 8192，岭回归正则项系数 $\gamma$ 设为 1，并尽可能保留训练超参数一致，以此保障比较的公平性。
+
+\subsection{主要结果分析}
+
+表~\ref{tab:medmnist_dataset} 汇总了本节所取用的 MedMNIST 医学图像持续学习基准设置。在该设置之上，如表~\ref{tab:medmnist_cil} 所示，本文方法与各类经典持续学习基线在三个数据集上的最终对比结果如下。
+
+\begin{table}[!htbp]
+\centering
+\caption{MedMNIST 基准上的方法对比结果。评估指标为平均准确率（Acc，$\uparrow$）与平均遗忘率（Forg，$\downarrow$），本文方法在三个数据集上均取得最优结果。}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{lcccccc}
+\toprule
+\multicolumn{7}{c}{\textbf{类别增量学习}}\\
+\midrule
+\multirow{2}{*}{\textbf{方法}} &
+\multicolumn{2}{c}{\textbf{BloodMNIST}} &
+\multicolumn{2}{c}{\textbf{PathMNIST}} &
+\multicolumn{2}{c}{\textbf{OrganAMNIST}}  \\  \cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
+ & Acc~$\uparrow$ & Forg~$\downarrow$ & Acc~$\uparrow$ & Forg~$\downarrow$ & Acc~$\uparrow$ & Forg~$\downarrow$ \\
+\midrule
+Naive & 24.87 & 93.88 & 54.87 & 50.20 & 35.78 & 77.77 \\
+EWC~\citep{kirkpatrick2017ewc}   & 24.41 & 66.41 & 49.38 & 54.58 & 34.40 & 76.76 \\
+MAS~\citep{aljundi2018memory}    & 43.94 & 69.43 & 34.22 & 74.98 & 44.99 & 55.13 \\
+LwF~\citep{li2017learning}       & 27.29 & 91.71 & 54.83 & 50.10 & 34.76 & 79.15 \\
+EEIL~\citep{castro2018end}       & 24.46 & 94.86 & 46.68 & 61.40 & 31.62 & 79.04 \\
+iCaRL~\citep{rebuffi2017icarl}   & 41.17 & 37.83 & 69.44 & 15.85 & 58.05 & 17.83 \\
+\midrule
+\textbf{本文方法} & \textbf{79.84} & \textbf{9.64} & \textbf{73.55} & \textbf{9.06} & \textbf{60.55} & \textbf{11.56} \\
+\bottomrule
+\end{tabular}
+\label{tab:medmnist_cil}
+\end{table}
+
+实验结果展现，闭式解持续学习方法在三个医学图像数据集上整体表现优于传统持续学习方法。以 BloodMNIST 为例，本文方法的平均准确率达到 79.84\%，平均遗忘率为 9.64\%；与之相对，传统方法里表现最好的 iCaRL 平均准确率为 41.17\%，平均遗忘率为 37.83\%。这一结果表明，解析更新在维系旧类知识方面有相当明显的优势。
+
+在 PathMNIST 数据集上，闭式解持续学习方法依旧保持领先，取得 73.55\% 的平均准确率与 9.06\% 的平均遗忘率，而传统基线中表现较好的 iCaRL 对应数值则分别为 69.44\% 与 15.85\%。这表明在病理图像这一类纹理复杂、类别间差异细微的数据上，闭式解分类头依旧能比较好地继承初始编码器的特征，并借助解析更新把历史知识保留下来。
+
+在 OrganAMNIST 数据集上，各方法之间的差距相对收窄，但闭式解持续学习方法依旧占优——平均准确率达到 60.55\%，高于 iCaRL 的 58.05\%；平均遗忘率为 11.56\%，明显优于大多数传统方法。
+
+\subsection{结果讨论}
+
+从整体上来看，解析方法最大的好处就是可以兼顾高准确率以及低遗忘。而以往的回放或者蒸馏都需要在鲁棒性和灵活性中做出权衡，在增量过程中闭式解的方法并不用梯度直接去更新分类器权重，因此对于旧类别区分边界遗忘较少。
+
+在 BloodMNIST 中闭式解持续学习方法有较大优势。说明如果最初的几个任务训练得到编码器提取出的特征具有较好的泛化能力，则之后的任务只需更新解析分类头就可以达到很好的性能。换句话说，在医学图像中一些任务的类别不断增多，但是它们的基本纹理、形状等却是一致的。
+
+从效果上看，闭式解持续学习方法对于这三个数据集都把遗忘率控制在一个很低水平，说明它的统计量递推更新能很好地保存之前学到的知识。但是也要注意到，在医学数据中常常存在类别不平衡的问题，所以仍然会对少数类造成影响，在此基础上可以进一步使用类别重加权的方法进行改进。
+
+从临床应用的角度来看，在医学图像任务上，解析持续学习也有三个方面的优势：首先是隐私优势，该方法不用存储历史原始样本，只需要保存一个逆自相关矩阵 $\Psi_t$ 和一个解析分类头 $\widehat{\Phi}_t$，这更符合医疗行业对于数据保护的要求；其次是效率优势，在增量时期只需要进行一次解析更新，而不需要多次反向传播，对于那些需要不断引入新的疾病类型的医疗机构或者研究机构更加友好；最后是可解释的优势，解析分类头的学习是一个有明确数学表达式的矩阵变化过程，可以更好地从理论上理解知识保持以及增量学习之间的联系，在一些高风险的应用场景下是非常重要的。
+
+\section{时间序列分类实验}
+
+\subsection{数据集与设置}
+
+\begin{table}[!htbp]
+    \centering
+    \caption{时间序列实验所用数据集汇总。表中给出每个数据集的通道数（$C$）、序列长度（$L$）、训练与测试划分、类别数量，并附本实验所采取的任务划分数。}
+    \label{tab:ts_dataset}
+    \begin{NiceTabular}{l|ccccc}
+        \toprule
+        数据集 & 形状 $(C \times L)$ & 训练集规模 & 测试集规模 & 类别数 & 实验任务数  \\ \midrule
+        UCI-HAR~\citep{ismi2016k} & $9\times128$ & 7352 & 2947 & 6 & 3 \\
+
+        UWave~\citep{liu2009uwave} & $3\times315$ & 896 & 3582 & 8 & 4\\
+
+        DSA~\citep{altun2010human} & $45\times125$ & 6840 & 2280 & 18 & 6\\
+
+        GRABMyo~\citep{pradhan2022multi} & $28\times128$ & 36120 & 12040 & 16 & 5\\
+
+        WISDM~\citep{weiss2019wisdm} & $3\times200$ & 18184 & 6062 & 18 & 6\\
+        \bottomrule
+
+    \end{NiceTabular}
+\end{table}
+
+如表~\ref{tab:ts_dataset} 所示，本节在五个公开时间序列数据集上对 4.2 节框架的性能做检验，分别是 UCI-HAR~\citep{ismi2016k}、UWave~\citep{liu2009uwave}、DSA~\citep{altun2010human}、GRABMyo~\citep{pradhan2022multi} 与 WISDM~\citep{weiss2019wisdm}。这些数据集覆盖了人体活动识别、手势识别以及肌电识别等多种时序感知场景，可较为全面地映射时间序列持续学习的实际难度。
+
+UCI-HAR 由智能手机惯性传感器采集的日常活动序列组成，共 6 类；UWave 是基于加速度计的手势识别数据，共 8 类；DSA 来自多传感器体育动作识别，共选取 18 类；GRABMyo 则是一个规模较大的表面肌电手势识别数据集，共 16 类；WISDM 是基于手机与可穿戴设备的人体活动识别数据，一共有 18 类。我们在每个数据集上采用类别增量学习设置，将类别随机打乱后按每个任务包含两类的方式划分为若干个任务，并使用不同随机种子进行多次重复实验，以考察方法对类别顺序变化的鲁棒性。按照文献~\citep{qiao2024tscil} 的设置，对于类别数量较少的 UCI-HAR 和 UWave 数据集，其完整任务流分别包含 3 个和 4 个实验任务；由于任务数量有限，这两类数据集不再额外划分类别独立的验证任务流，而是在训练数据内部划分验证集按照训练集和验证集九比一用于超参数选择和早停。对于 DSA、GRABMyo 和 WISDM 等类别数量较多的数据集，则先划分 3 个任务作为验证流，用于网格搜索和超参数选择，其余任务作为实验流用于最终结果评估。随后，我们使用在验证流上选定的超参数，在实验流上进行正式的持续学习实验。
+
+\subsection{评价指标与对比方法}
+
+评价指标依旧运用第2章2.6节定义的平均准确率（ACC，式(\ref{eq:metric_acc})）与平均遗忘率（Forgetting，式(\ref{eq:metric_forget})），它们分别映射方法的可塑性与稳定性。
+
+对比方法既包括典型的无样本方法 LwF~\citep{li2017learning}、MAS~\citep{aljundi2018memory} 与 DT$^2$W~\citep{qiao2023dt2w}，也包括典型的回放方法 GR~\citep{shin2017continual}、ER~\citep{rolnick2019experience}、iCaRL~\citep{rebuffi2017icarl}、DER~\citep{buzzega2020dark}、Herding~\citep{welling2009herding}、ASER~\citep{ASER}、CLOPS~\citep{CLOPS} 与 FastICARL~\citep{FASTICARL}。其中 Herding 取自 \citet{welling2009herding} 提出的样本选择算法，本节把它作为一条独立的回放基线（与 iCaRL 共用的 herding 选择策略思路相近但达成独立），其做法是按特征空间距离贪心地挑选出最具代表性的样本作为缓冲区。除此之外，本节还设置了只在当前任务上训练的 Naive 基线以及联合训练上界 Offline，以便更直观地察看各方法的表现区间。
+
+完成细节方面，本节选用一维卷积网络作为编码器，初始任务设置与各基线方法保持一致；初始任务训练完成之后冻结编码器，只在后续任务里借助解析分类头做更新。随机高维映射的维度 $d_E$ 设为 8000，正则化系数 $\gamma$ 依托在验证流任务上做网格搜索得到，集成版本则使用 5 个不同随机初始化的隐藏层做集成。
+
+\subsection{稳定性与可塑性分析}
+
+\begin{figure*}[!htbp]
+    \centering
+        \includegraphics[width=\textwidth]{images/acc_evol_all.pdf}
+    \caption{随着任务推进，各方法在五个数据集上的准确率变化情况。Naive表示不采用任何增量学习策略的基线方法，Offline表示一次性在完整数据集上训练的方法。}
+    \label{fig:mainfig_LN}
+\end{figure*}
+
+\begin{table*}[!htbp]
+    \centering
+    \setlength{\tabcolsep}{1.5pt}
+    \caption{Naive表示不采用任何增量学习策略的基线方法，Offline表示一次性在完整数据集上训练的方法。各指标中排名第一和第二的方法分别用\textcolor{red}{红色}与\textcolor{blue}{蓝色}标注。每个指标均报告 5 次运行结果的均值和标准差。表中 $\mathcal{A}_T$ 与 $\mathcal{F}_T$ 分别对应第 2 章评价指标节中式(\ref{eq:metric_acc})定义的 ACC 与式(\ref{eq:metric_forget})定义的 Forgetting。}
+    \resizebox{\linewidth}{!}{
+    \begin{NiceTabular}{lcccccccccc}
+        \toprule
+        \multirow{2}{*}{方法} & \multicolumn{2}{c}{UCI-HAR} & \multicolumn{2}{c}{UWave} & \multicolumn{2}{c}{DSA} & \multicolumn{2}{c}{GRABMyo} & \multicolumn{2}{c}{WISDM} \\
+        \cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7} \cmidrule(lr){8-9} \cmidrule(lr){10-11}
+         & $\mathcal{A}_T\uparrow$ & $\mathcal{F}_T\downarrow$ & $\mathcal{A}_T\uparrow$ & $\mathcal{F}_T\downarrow$ & $\mathcal{A}_T\uparrow$ & $\mathcal{F}_T\downarrow$ & $\mathcal{A}_T\uparrow$ & $\mathcal{F}_T\downarrow$ & $\mathcal{A}_T\uparrow$ & $\mathcal{F}_T\downarrow$ \\
+        \midrule
+        Naive & 36.44{\tiny $\pm$10.35} & 92.25{\tiny $\pm$13.25} & 24.85{\tiny $\pm$0.12} & 98.15{\tiny $\pm$1.40} & 19.81{\tiny $\pm$4.12} & 96.23{\tiny $\pm$4.95} & 19.46{\tiny $\pm$0.34} & 94.17{\tiny $\pm$3.34} & 14.60{\tiny $\pm$2.25} & 88.47{\tiny $\pm$10.58} \\
+        Offline & 92.31{\tiny $\pm$0.82} & N.A & 96.39{\tiny $\pm$0.22} & N.A & 99.53{\tiny $\pm$0.76} & N.A & 93.83{\tiny $\pm$0.87} & N.A & 88.60{\tiny $\pm$1.94} & N.A \\
+        \midrule
+        LwF~\citep{li2017learning} & 47.40{\tiny $\pm$14.04} & 74.04{\tiny $\pm$22.17} & 29.09{\tiny $\pm$5.34} & 73.47{\tiny $\pm$25.06} & 17.01{\tiny $\pm$4.33} & 87.93{\tiny $\pm$15.21} & 19.42{\tiny $\pm$0.32} & 93.25{\tiny $\pm$6.64} & 13.83{\tiny $\pm$3.51} & 83.53{\tiny $\pm$17.51} \\
+        MAS~\citep{aljundi2018memory} & 59.53{\tiny $\pm$15.90} & 52.47{\tiny $\pm$27.00} & 40.74{\tiny $\pm$9.29} & 65.01{\tiny $\pm$15.14} & 35.75{\tiny $\pm$6.35} & 66.17{\tiny $\pm$14.57} & 18.15{\tiny $\pm$1.57} & 88.34{\tiny $\pm$7.52} & 19.25{\tiny $\pm$6.66} & 74.65{\tiny $\pm$12.06} \\
+        DT$^2$W~\citep{qiao2023dt2w} & 80.15{\tiny $\pm$6.11} & 16.55{\tiny $\pm$9.33} & 55.09{\tiny $\pm$9.27} & 40.28{\tiny $\pm$18.04} & 19.06{\tiny $\pm$4.11} & 96.85{\tiny $\pm$4.81} & 20.09{\tiny $\pm$7.28} & 22.57{\tiny $\pm$9.52} & 15.59{\tiny $\pm$7.92} & 37.50{\tiny $\pm$14.48} \\
+        \midrule
+        GR~\citep{shin2017continual} & 80.04{\tiny $\pm$7.69} & 25.75{\tiny $\pm$15.74} & 85.77{\tiny $\pm$3.76} & 15.37{\tiny $\pm$4.38} & 69.50{\tiny $\pm$7.26} & 36.43{\tiny $\pm$8.64} & 20.56{\tiny $\pm$1.37} & 94.44{\tiny $\pm$3.13} & 24.33{\tiny $\pm$8.12} & 85.78{\tiny $\pm$10.00} \\
+        ER~\citep{rolnick2019experience} & 89.53{\tiny $\pm$2.41} & 9.53{\tiny $\pm$6.54} & 78.89{\tiny $\pm$4.27} & 25.87{\tiny $\pm$5.68} & 97.24{\tiny $\pm$1.43} & 3.25{\tiny $\pm$1.78} & 61.16{\tiny $\pm$3.30} & 40.87{\tiny $\pm$3.59} & 66.88{\tiny $\pm$7.36} & 33.80{\tiny $\pm$7.90} \\
+        DER~\citep{buzzega2020dark} & 90.75{\tiny $\pm$1.90} & 8.58{\tiny $\pm$5.97} & 77.74{\tiny $\pm$6.51} & 27.31{\tiny $\pm$7.67} & 98.01{\tiny $\pm$0.69} & 2.28{\tiny $\pm$0.82} & 63.78{\tiny $\pm$3.96} & 37.01{\tiny $\pm$3.68} & 67.14{\tiny $\pm$5.37} & 33.38{\tiny $\pm$6.67} \\
+        Herding~\citep{welling2009herding} & 89.95{\tiny $\pm$2.51} & 9.96{\tiny $\pm$7.24} & 85.42{\tiny $\pm$1.89} & 16.51{\tiny $\pm$1.82} & 97.75{\tiny $\pm$1.36} & 2.62{\tiny $\pm$1.59} & 60.07{\tiny $\pm$3.69} & 42.46{\tiny $\pm$4.02} & 69.67{\tiny $\pm$3.98} & 30.04{\tiny $\pm$3.98} \\
+        ASER~\citep{ASER} & 89.82{\tiny $\pm$1.43} & 10.20{\tiny $\pm$5.57} & 77.89{\tiny $\pm$5.26} & 27.14{\tiny $\pm$6.33} & 95.97{\tiny $\pm$6.32} & 4.73{\tiny $\pm$7.55} & 57.90{\tiny $\pm$4.79} & 45.49{\tiny $\pm$5.48} & 51.48{\tiny $\pm$15.85} & 53.04{\tiny $\pm$18.68} \\
+        CLOPS~\citep{CLOPS} & 89.64{\tiny $\pm$1.50} & 8.98{\tiny $\pm$4.82} & 73.79{\tiny $\pm$3.39} & 32.12{\tiny $\pm$2.95} & 89.65{\tiny $\pm$5.51} & 12.30{\tiny $\pm$6.64} & 52.05{\tiny $\pm$5.11} & 52.22{\tiny $\pm$5.54} & 44.00{\tiny $\pm$8.11} & 60.74{\tiny $\pm$10.12} \\
+        FastICARL~\citep{FASTICARL} & 85.43{\tiny $\pm$3.74} & 17.51{\tiny $\pm$8.25} & 79.01{\tiny $\pm$0.98} & 25.60{\tiny $\pm$2.24} & 91.39{\tiny $\pm$6.16} & 10.28{\tiny $\pm$7.44} & 52.84{\tiny $\pm$3.49} & 52.46{\tiny $\pm$4.19} & 44.87{\tiny $\pm$3.67} & 52.79{\tiny $\pm$6.37} \\
+        \midrule
+        TS-ACL & \textcolor{red}{90.89}{\tiny $\pm$1.77} & \textcolor{red}{4.99}{\tiny $\pm$3.12} & \textcolor{blue}{93.56}{\tiny $\pm$3.36} & \textcolor{blue}{3.47}{\tiny $\pm$2.13} & \textcolor{blue}{98.00}{\tiny $\pm$3.82} & \textcolor{blue}{1.22}{\tiny $\pm$2.44} & \textcolor{blue}{68.92}{\tiny $\pm$3.53} & \textcolor{blue}{12.74}{\tiny $\pm$1.40} & \textcolor{blue}{86.59}{\tiny $\pm$1.42} & \textcolor{blue}{5.47}{\tiny $\pm$0.51} \\
+        TS-ACL-E & \textcolor{blue}{88.67}{\tiny $\pm$5.00} & \textcolor{blue}{5.17}{\tiny $\pm$2.82} & \textcolor{red}{95.11}{\tiny $\pm$0.50} & \textcolor{red}{2.56}{\tiny $\pm$1.10} & \textcolor{red}{99.30}{\tiny $\pm$0.88} & \textcolor{red}{0.48}{\tiny $\pm$0.94} & \textcolor{red}{75.27}{\tiny $\pm$2.65} & \textcolor{red}{10.28}{\tiny $\pm$1.32} & \textcolor{red}{87.11}{\tiny $\pm$1.23} & \textcolor{red}{5.52}{\tiny $\pm$1.01} \\
+        \bottomrule
+    \end{NiceTabular}
+    }
+    \label{tbl:main_results_LN}
+
+\end{table*}
+
+如图~\ref{fig:mainfig_LN} 所示，各方法在五个数据集上的准确率随任务推进呈现出明显不同的演化趋势；参见表~\ref{tbl:main_results_LN}，该框架在遗忘率上明显优于已有方法。从数据来看，在 UCI-HAR、UWave、DSA、GRABMyo 与 WISDM 五个数据集上，其遗忘率分别为 4.99\%、3.47\%、1.22\%、12.74\% 与 5.47\%。汇总来看，这些结果都明显低于大多数基线方法，尤其在 DSA 和 WISDM 等类内变化更为复杂的数据集上优势更为突出。
+
+此结果验证了第一章提出的基本观点：梯度更新造成遗忘的原因之一，以及闭式解增量更新能够在一定程度上避免这种矛盾。因为编码器在第一次之后被冻结，在后续增量中不会对之前学到的特征产生影响；另外，解析分类头利用递归统计量进行增量学习从而获得新的信息，因此以往的知识得到较好的保存。
+
+在准确率方面，该框架同样表现亮眼。五个数据集上的平均准确率分别达到 90.89\%、93.56\%、98.00\%、68.92\% 与 86.59\%。与无样本持续学习基线相比，这些结果有明显的领先；即便和多种回放方法相比，该框架在大多数数据集上也呈现更优表现或接近 Offline 上界。
+
+特别是在 UWave、DSA 与 WISDM 这类类别边界比较复杂的数据集上，该框架不止规避了遗忘，还能持续推升整体精度。这一点表明多尺度特征融合与随机高维映射确实强化了模型对新类别的适应能力，使得冻结编码器的框架不至于因为缺乏可塑性而表现受限。
+
+\subsection{消融实验}
+
+\begin{table}[!htbp]
+    \centering
+    \caption{时间序列消融实验结果，展示不同组件的影响。表中数值为 $\mathcal{A}_T\uparrow$，各方法的最佳结果以粗体标出。}
+    \label{tab:ablation-ts}
+        \begin{NiceTabular}{l|ccc}
+            \toprule
+            Datasets & Deep & Deep+RHL & Deep+RHL+Fusion \\ \midrule
+            UCI-HAR & 86.18 & 87.17 & \textbf{90.89} \\
+            \midrule
+            UWave & 87.54 & 89.86 & \textbf{93.56} \\
+            \midrule
+            DSA & 91.65 & 96.44 & \textbf{98.00} \\
+            \midrule
+            GRABMyo & 40.85 & 56.43 & \textbf{68.92} \\
+            \midrule
+            WISDM & 48.98 & 82.32 & \textbf{86.59} \\ \bottomrule
+        \end{NiceTabular}
+\end{table}
+
+如表~\ref{tab:ablation-ts} 所示，比较了三种不同的嵌入方式：仅使用深层特征、深层特征加上随机隐藏层、深层特征加上随机隐藏层之后再加上多尺度结合，可以看出随着模块越来越多，模型对于这五个数据集的平均准确率也不断提高。
+
+以GRABMyo为例，在仅利用深层特征情况下，其平均准确率为40.85\%，引入随机隐藏层之后提高至56.43\%，然后再加上多尺度组合后进一步提升到68.92\%。这说明：随机高维映射显著改善特征线性可分能力，而多尺度组合弥补了深层特征对于局部时间序列信息建模不足问题。
+
+对于集成版本，在UWave、DSA、GRABMyo以及WISDM上都有一定的提升，特别是在GRABMyo上的提升显著。而这也说明不同的随机映射形成的多种不同的分类面能够更好地捕捉到类内的差异性，进而提高模型的鲁棒性。
+
+\subsection{效率分析}
+
+\begin{figure*}[!htbp]
+    \centering
+        \includegraphics[width=\textwidth]{images/time_comparison.pdf}
+    \caption{五个基准数据集上不同方法的运行时间对比。TS-ACL 在所有数据集上均表现出最快的运行速度，体现了其优越的计算效率。}
+    \label{fig:time_comparison}
+\end{figure*}
+
+效率层面的差距落在了图~\ref{fig:time_comparison}中。原因也很清楚：增量部分已不再走多轮反向传播的道路，整个更新过程简化为一次矩阵乘法、一次矩阵求逆的操作——对于每一个新的任务仅需一次解析更新即可完成。这使得每个任务所花费的时间大大减少，在所有五个数据集比较中，TS-ACL都拥有最短的时间，相比于多次epoch回放的方法或者蒸馏的方法有较大提升。
+
+这也不仅仅是快的问题，在可穿戴健康监测、工业物联网传感网、自动驾驶时序感知等应用场景下——它们的一个共同点是计算能力和存储都非常有限，但是又必须不断接受新工作方式的情况下，闭式解持续学习可以用很小的成本满足这个边运行、边学习新工作方式，这也是它工程上的一大优势。
+
+\section{语义分割实验}
+
+\subsection{数据集与设置}
+
+二维图像实验取用 Pascal VOC2012 数据集~\citep{everingham2010voc}。该数据集共有 21 个语义类别（含背景类），训练集为 10582 张图像，验证集为 1449 张图像。本节在该数据集上分别对顺序设定、不相交设定与重叠设定下的类增量语义分割性能进行证实。
+
+三维点云实验运用 S3DIS 与 ScanNet 两个室内场景语义分割数据集~\citep{armeni2016s3dis,dai2017scannet}。S3DIS 包含 6 个区域共 272 个房间，按惯例以 Area 5 作为检验区域；ScanNet 包含 1513 个室内扫描场景，其中 1210 个用于训练，312 个用于证实。为构造点云增量学习的输入，本节用滑动窗口对房间做切分，并从每个块里随机采样 2048 个点作为网络输入。在类别顺序方面，本节分别选用按原始标注顺序划分的 $S^0$ 与按类别字母顺序划分的 $S^1$ 两种设置。
+
+落地细节方面，二维图像实验的初始阶段使用 DeepLabv3 加 ResNet-101 主干做监督训练；后续增量阶段冻结编码器，在其后接入随机初始化隐藏层与解析分类头。二维实验的高维映射维度 $d_E$ 设为 8192，岭回归正则项系数 $\gamma$ 设为 1，二维伪标签阈值 $\tau$ 设为 0.4。三维点云实验取用 DGCNN 作为点云编码器，初始阶段按常规分割训练，后续增量阶段同样冻结编码器，只更新高维映射与解析分类头。三维实验中高维映射维度 $d_E$ 设为 5000，正则项 $\gamma$ 设为 1；伪标签阈值借助交叉检验确定，分别在 S3DIS 与 ScanNet 上设为 0.0035 和 0.001。
+
+\subsection{评价指标与对比方法}
+
+评价指标运用语义分割任务的标准平均交并比（mIoU）。该指标与第 2 章 §2.6 中式(\ref{eq:metric_acc})定义的 ACC 形式上一致——把任务级准确率 $a_{t,i}$ 替换成对应任务上的 mIoU 就可。出于更全面地分析稳定性与可塑性，本节同时报告旧类别集合、新类别集合以及全部类别上的 mIoU：旧类别集合映射知识保留能力，新类别集合映射增量适应能力，全部类别结果映射整体的持续学习性能。
+
+对比方法方面，二维图像实验在 Pascal VOC2012 上与多类典型的类增量语义分割方法做系统比较，所选方法涵盖基于知识蒸馏与背景建模的 LwF~\citep{LWF}、LwF-MC~\citep{rebuffi2017icarl}、ILT~\citep{ILT}、CIL~\citep{CIL}、MiB~\citep{MiB} 与 PLOP~\citep{douillard2021plop}；以及基于特征/原型蒸馏与结构补偿的 SDR~\citep{SDR}、UCD+PLOP~\citep{UCD}、REMINDER~\citep{REMINDER}、RCIL~\citep{RCIL}、SPPA~\citep{SPPA}、CAF~\citep{CAF}、AWT+MiB~\citep{AWT} 与 EWF+MiB~\citep{EWF}；还包括近期的 GSC~\citep{GSC}。与此同时，本节把没有任何持续学习策略的 Naive 作为下界、把参数正则化代表 EWC~\citep{kirkpatrick2017ewc} 作为参考，并把联合训练 Offline 作为理论上界。
+
+三维点云实验在 S3DIS 与 ScanNet 上与只在初始阶段数据上训练的基础训练（BT）、Naive 基线、参数正则化方法 EWC~\citep{kirkpatrick2017ewc}，以及代表性的三维类增量分割方法 \citet{Yang3D} 做比较，并同样把联合训练 Offline 作为理论上界。所有对比方法的结果都直接取自其原论文与综述~\citep{CSSsurvey}。
+
+\subsection{二维图像结果分析}
+
+\begin{table*}[!htbp]
+    \caption{Pascal VOC2012 在顺序（sequential）设定下的 CSS mIoU (\%) 定量比较。对比方法的结果直接取自原论文和 \citep{CSSsurvey}。最佳结果使用粗体表示。}
+
+    \centering
+    \setlength{\tabcolsep}{5pt}
+    \renewcommand{\arraystretch}{1.12}
+            \begin{tabular}{@{}llcccc ccc@{}}
+                \toprule[0.8pt]
+                \multirow{2}*{设定} &\multirow{2}*{方法} &\multirow{2}*{模型}&
+                \multicolumn{3}{c}{15-1 (6 阶段)} & \multicolumn{3}{c}{15-5 (2 阶段)} \\
+                \cmidrule(lr){4-6}\cmidrule(l){7-9}
+                &&& 0-15 & 16-20 & 全部 & 0-15 & 16-20 & 全部\\
+                \midrule
+
+                \multirow{9}*{顺序设定}
+                &Naive&DeepLabv3+&49.0&17.8&41.6&62.0&38.1&56.3\\
+                &LwF~\citep{LWF} &DeepLabv3+&33.7 &13.7 &29.0&68.0 &43.0 &62.1\\
+                &LwF-MC~\citep{rebuffi2017icarl}&DeepLabv3+&12.1&1.9&9.7&70.6&19.5&58.4\\
+                &ILT~\citep{ILT} &DeepLabv3+&49.2&30.3&48.3&71.3&\textbf{47.8}&65.7\\
+                &CIL~\citep{CIL} &DeepLabv3+&52.4&22.3&45.2&63.8&39.8&58.1\\
+                    &MiB~\citep{MiB}&DeepLabv3+&35.7&11.0&29.8&73.0&44.4&66.1\\
+                    &SDR~\citep{SDR}&DeepLabv3+&58.5&10.1&47.0&73.6&46.7&67.2\\
+                    &SDR+MiB~\citep{SDR}&DeepLabv3+&58.1&11.8&47.1&74.6&43.8&67.3\\
+                    &本文方法 &DeepLabv3 &\textbf{78.1} &\textbf{42.0} &\textbf{70.0} &\textbf{78.1} &42.0 &\textbf{70.0} \\
+
+        \bottomrule[0.8pt]
+            \end{tabular}
+    \label{table-VOC2012:1}
+\end{table*}
+
+\begin{table*}[!htbp]
+    \caption{Pascal VOC2012 在不相交（disjoint）和重叠（overlapped）设定下的 CSS mIoU (\%) 定量比较。对比方法的结果直接取自原论文和 \citep{CSSsurvey}。最佳结果使用粗体表示。}
+
+    \centering
+      \setlength{\tabcolsep}{5pt}
+      \renewcommand{\arraystretch}{1.12}
+            \begin{tabular}{@{}llcccc ccc@{}}
+                        \toprule[0.8pt]
+                        \multirow{2}*{设定} &\multirow{2}*{方法} &\multirow{2}*{模型}&
+                        \multicolumn{3}{c}{15-1 (6 阶段)} & \multicolumn{3}{c}{10-1 (11 阶段)} \\
+                        \cmidrule(lr){4-6}\cmidrule(l){7-9}
+                        &&& 0-15 & 16-20 & 全部 & 0-10 & 11-20 & 全部\\
+                        \midrule
+                        \multirow{6}*{不相交设定} &Naive&DeepLabv3&0.20&1.80&0.60&6.30&1.10&3.80\\
+                        &MiB~\citep{MiB}&DeepLabv3 &46.20&12.90&37.90&9.50&4.10&6.90 \\
+                        &PLOP~\citep{douillard2021plop}&DeepLabv3&57.86&13.67&46.48&9.70&7.00&8.40 \\
+                        &SDR~\citep{SDR} &DeepLabv3+ &59.40&14.30&48.70&17.30&11.00&14.30\\
+                        &RCIL~\citep{RCIL}&DeepLabv3&66.10&18.20&54.70&30.60&4.70&18.20 \\
+                    &本文方法&DeepLabv3&\textbf{77.66}&\textbf{40.33}&\textbf{68.77}&\textbf{70.85}&\textbf{42.13}&\textbf{57.17} \\
+                        \midrule
+                        \multirow{15}*{重叠设定} &Naive&DeepLabv3&0.20&1.80&0.60&6.30&2.80&4.70\\
+                        &EWC~\citep{kirkpatrick2017ewc} &DeepLabv3&0.30 &4.30 &1.30&- &- &-\\
+                        &LwF-MC~\citep{rebuffi2017icarl}&DeepLabv3 &6.40&8.40&6.90&4.65&5.90&4.95\\
+                        &ILT~\citep{ILT} &DeepLabv3&4.90&7.80&5.70&7.15&3.67&5.50\\
+                        &MiB~\citep{MiB}&DeepLabv3&34.22&13.50&29.29&12.25&13.09&12.65\\
+                        &PLOP~\citep{douillard2021plop}&DeepLabv3&65.12&21.11&54.64&44.03&15.51&30.45 \\
+                        &UCD+PLOP~\citep{UCD}&DeepLabv3&66.30&21.60&55.10&42.30&28.30&35.30\\
+                        &REMINDER~\citep{REMINDER} &DeepLabv3&68.30&27.23&58.52&-&-&- \\
+                        &RCIL~\citep{RCIL}&DeepLabv3&70.60&23.70&59.40&55.40&15.10&34.30\\
+                        &SPPA~\citep{SPPA}&DeepLabv3&66.20&23.30&56.00&-&-&-\\
+                        &CAF~\citep{CAF}&DeepLabv3&55.70&14.10&45.30&-&-&-\\
+                        &AWT+MiB~\citep{AWT}&DeepLabv3 &59.10&17.20&49.10&33.20&18.00&26.00\\
+                        &EWF+MiB~\citep{EWF}&DeepLabv3&78.00&25.50&65.50&56.00&16.70&37.30\\
+                        &GSC~\citep{GSC}&DeepLabv3&72.10&24.40&60.80&50.60&17.30&34.70 \\
+                    &本文方法&DeepLabv3&\textbf{79.16}&\textbf{38.00}&\textbf{69.36}&\textbf{75.02}&\textbf{41.20}&\textbf{58.91} \\
+                        \midrule
+                        Offline & - & DeepLabv3&79.77&72.35&77.43&78.41&76.35&77.43\\
+                        \bottomrule[0.8pt]
+            \end{tabular}
+
+    \label{table-VOC2012:2}
+\end{table*}
+
+如表~\ref{table-VOC2012:1} 与表~\ref{table-VOC2012:2} 所示，本文方法在 VOC2012 重叠（overlapped）15-1 和不相交（disjoint）设置下均取得了最优 mIoU；在 15-5 配置下，虽说 ILT 在新类别上 mIoU 略高（47.8 vs.~42.0）——但本文方法在旧类别（78.1 vs.~71.3）以及全部类别（70.0 vs.~65.7）上依旧显著领先，映射了稳定性—可塑性之间更好的折中。在顺序设定下，本文方法在 15-1 配置下取得了 70.0\% 的总体 mIoU，其中旧类别为 78.1\%，新类别为 42.0\%。这一结果表明，即使只在初始阶段训练编码器，后续借助闭式解分类头也能在旧知识维系与新知识吸收之间保留较好平衡。
+
+到了更具挑战的不相交设定，本文方法在 15-1 配置下取得 68.77\% 的总体 mIoU，明显高于已有的代表性方法；在 10-1 配置下，本文方法达到 57.17\% 的总体 mIoU，相较一部分现有方法的领先幅度比较显著。这表明伪标签机制能够有效缓解旧类别被错误地吸收进背景的问题。
+
+重叠设定与不相交设定的最大不同点在于背景标签上，在重叠协议中，背景像素既可以是真实的背景也可以是被遮挡的老类别甚至是未来才会出现的新类别，这对伪标签方法提出了更高的要求，在15-1以及10-1这两种增量协议下我们得到了整体mIoU分别为69.36\%以及58.91\%，由相邻两个阶段图可以看出，性能下降主要集中在第2～5个增量之间，在之后基本保持稳定（后续消融实验会有更详细的拆分），也就是说即使加大了对背景语义的不确定性，闭式解更新结合伪标签优化也能够带来一定的收益，这也是本文的方法在重叠协议中的优势所在。
+
+从结果趋势来看，本文的方法对于旧类别的保持效果良好。由于增量阶段不对编码器进行梯度更新，因此旧类别的特征表示是固定的；同时，随机高维映射也使得新的类别更加容易被解析分类头分割开，所以该模型对于旧类别的保持以及新类别的学习效果都非常优秀。
+
+\subsection{三维点云结果分析}
+
+\begin{table*}[!htbp]
+    \caption{在 S3DIS 和 ScanNet 数据集 $S^{0}$ 划分下，三维类增量语义分割方法的定量比较。BT 代表仅在第一步的数据集上训练。增量方法取得的最佳结果以粗体显示。}
+    \label{tab:experiment:s0}
+    \centering
+    \setlength{\tabcolsep}{4pt}
+    \renewcommand{\arraystretch}{1.05}
+        \begin{tabular}{ll| c| ccc| ccc| ccc}
+             \toprule[1pt]
+            &\multirow{2}*{方法} &\multirow{2}*{模型}&
+        \multicolumn{3}{c|}{8-1 (6 阶段)} & \multicolumn{3}{c|}{10-1 (4 阶段) } &
+            \multicolumn{3}{c}{12-1 (2 阶段)} \\
+            &&& 0-7 & 8-12 & 全部 & 0-9 & 10-12 & 全部 & 0-11 & 12 & 全部\\
+
+            \midrule
+            \multirow{6}*{S3DIS}
+            & BT   & DGCNN     & 49.85 &   -   &   -   & 47.03 &   -   &   -   & 45.37 &   -   &   -   \\
+            & Naive & DGCNN     & 5.45  & 4.94  & 5.25  & 16.66 & 11.54 & 15.48 & 28.34 & 34.02 & 28.77 \\
+            & EWC \citep{kirkpatrick2017ewc} & DGCNN & 30.99 & 4.16 & 20.67 & 39.14 & 14.73 & 33.51 & 37.23 & 15.49 & 35.53 \\
+            & \citet{Yang3D} & DGCNN & 36.90 & 13.76 & 27.80 & 36.98 & 26.60 & 34.59 & 44.54 & \textbf{38.47} & 44.07 \\
+            & 本文方法 & DGCNN & \textbf{49.77} & \textbf{28.69} & \textbf{41.66} & \textbf{45.26} & \textbf{34.05} & \textbf{42.67} & \textbf{45.19} & 30.71 & \textbf{44.08} \\
+
+            & Offline & DGCNN     & 48.99 & 41.76 & 46.21 & 46.72 & 45.11 & 46.35 & 47.22 & 35.65 & 46.33 \\
+            \midrule[1pt]
+            &\multirow{2}*{方法} &\multirow{2}*{模型}&
+        \multicolumn{3}{c|}{15-1 (6 阶段)} & \multicolumn{3}{c|}{17-1 (4 阶段)} &
+            \multicolumn{3}{c}{19-1 (2 阶段)} \\
+            &&& 0-14 & 15-19 & 全部 & 0-16 & 17-19 & 全部 & 0-18 & 19 & 全部\\
+
+            \midrule
+            \multirow{6}*{ScanNet}
+                & BT   & DGCNN     & 37.52 &   -   &   -   & 34.72 &   -   &   -   & 32.64 &   -   &   -   \\
+                & Naive & DGCNN     & 4.41  & 3.20  & 4.10  & 2.76  & 4.19  & 2.97  & 11.37  & 8.86 & 11.25  \\
+                & EWC \citep{kirkpatrick2017ewc} & DGCNN & 12.32 & 2.48 & 9.86 & 11.34 & 1.20 & 9.82 & 17.84 & 11.11  & 17.51 \\
+                & \citet{Yang3D} & DGCNN & 8.46 & 4.44 & 7.46  & 12.29 & 6.48 & 11.42 & 25.56 & 11.31 & 24.85 \\
+                & 本文方法 & DGCNN & \textbf{32.56} & \textbf{10.22} & \textbf{26.97} & \textbf{29.59} & \textbf{12.83} & \textbf{27.98} & \textbf{28.54} & \textbf{16.88} & \textbf{27.96} \\
+
+                & Offline & DGCNN     & 37.59 & 16.42 & 32.30 & 34.78 & 16.69 & 32.07 & 32.28 & 18.12 & 32.08 \\
+            \bottomrule[1pt]
+    \end{tabular}
+\end{table*}
+
+\begin{table*}[!htbp]
+    \centering
+    \caption{在 S3DIS 和 ScanNet 数据集 $S^{1}$ 划分下，三维类增量语义分割方法的定量比较。BT 代表仅在第一步的数据集上训练。增量方法取得的最佳结果以粗体显示。}
+    \label{tab:experiment:s1}
+    \setlength{\tabcolsep}{4pt}
+    \renewcommand{\arraystretch}{1.05}
+        \begin{tabular}{ll| c| ccc| ccc| ccc}
+             \toprule[1pt]
+            &\multirow{2}*{方法} &\multirow{2}*{模型}&
+        \multicolumn{3}{c|}{8-1 (6 阶段)} & \multicolumn{3}{c|}{10-1 (4 阶段) } &
+            \multicolumn{3}{c}{12-1 (2 阶段)} \\
+            &&& 0-7 & 8-12 & 全部 & 0-9 & 10-12 & 全部 & 0-11 & 12 & 全部\\
+            \midrule
+            \multirow{6}*{S3DIS}
+            & BT   & DGCNN     & 37.61 &   -   &   -   & 42.93 &   -   &   -   & 44.68 &   -   &   -   \\
+            & Naive & DGCNN     & 12.69 &  2.57 & 8.80  & 10.11 &  2.33 & 8.31  & 25.05 &  11.75 & 24.04 \\
+            & EWC \citep{kirkpatrick2017ewc} & DGCNN & 17.50 & 2.59 & 11.77 & 20.54 & 8.86 & 17.84 & 23.20 & 11.40 & 22.38 \\
+            & \citet{Yang3D} & DGCNN & 41.28 &11.64 & 29.88  & 36.45 & 20.14 & 31.13 & 37.38 & 22.40 & 36.23 \\
+            & 本文方法 & DGCNN     & \textbf{51.33} & \textbf{30.72} & \textbf{43.40} & \textbf{45.16} & \textbf{35.98} & \textbf{43.04} & \textbf{45.65} & \textbf{27.53} & \textbf{44.25} \\
+
+            & Offline & DGCNN     & 39.29 & 57.42 & 46.26 & 42.19 & 59.08 & 46.09 & 46.96 & 38.89 & 46.35 \\
+            \midrule[1pt]
+            &\multirow{2}*{方法} &\multirow{2}*{模型}&
+        \multicolumn{3}{c|}{15-1 (6 阶段)} & \multicolumn{3}{c|}{17-1 (4 阶段)} &
+            \multicolumn{3}{c}{19-1 (2 阶段)} \\
+            &&& 0-14 & 15-19 & 全部 & 0-16 & 17-19 & 全部 & 0-18 & 19 & 全部\\
+            \midrule
+            \multirow{6}*{ScanNet}
+            & BT   & DGCNN     & 29.01 &   -   &   -   & 30.24 &   -   &   -   & 31.59 &   -   &   -   \\
+            & Naive & DGCNN     & 4.20  & 1.61  & 3.55  &  3.63 & 1.00  & 3.24  &  9.04 &  0.22 &  8.60 \\
+            & EWC \citep{kirkpatrick2017ewc} & DGCNN & 14.93 & \textbf{33.30} & 19.52 &  8.78 & \textbf{31.74} & 12.22 & 12.65 &  3.19 & 12.18 \\
+            & \citet{Yang3D} & DGCNN & 12.17 & 0.16 & 9.17 & 10.19 & 5.67 & 9.52 & 25.08 & \textbf{15.28} & 24.59 \\
+            & 本文方法 & DGCNN     & \textbf{28.20} & 16.09 & \textbf{25.18} & \textbf{28.43} & 15.01 & \textbf{26.42} & \textbf{28.71} & 11.84 & \textbf{27.84} \\
+
+            & Offline & DGCNN     & 28.93 & 39.06 & 31.46 & 30.12 & 40.33 & 31.65 & 31.29 & 30.03 & 31.23 \\
+            \bottomrule[1pt]
+    \end{tabular}
+\end{table*}
+
+如表~\ref{tab:experiment:s0} 与表~\ref{tab:experiment:s1} 所示，在 S3DIS 数据集上，本文方法在两种类别顺序设定下都得到了较强的结果。$S^0$ 划分下，8-1、10-1 与 12-1 这三种配置的总体 mIoU 分别为 41.66\%、42.67\% 与 44.08\%；$S^1$ 划分下，对应结果进一步强化到 43.40\%、43.04\% 与 44.25\%。和 Naive 方法以及正则化方法相比，本文方法在旧类别保留与新类别吸收这两个方面表现得更为均衡。
+
+而在难度更大的 ScanNet 数据集上，本文方法同样优于现有的增量方法。$S^0$ 划分下，15-1、17-1 与 19-1 这三种配置的总体 mIoU 分别为 26.97\%、27.98\% 与 27.96\%；$S^1$ 划分下，对应配置的总体 mIoU 则为 25.18\%、26.42\% 与 27.84\%。虽说点云任务本身比二维图像更困难、场景几何结构也更复杂，但本文方法依旧展现出良好的稳定性和可迁移性。
+
+\subsection{消融实验}
+
+\begin{table}[!htbp]
+    \centering
+    \caption{本文方法代表完整模型设置；w/o RHL表示模型不包含随机隐藏层（RHL）；w/o Pseudo-Labeling表示模型不使用伪标签机制。}
+    \begin{tabular}{lccc}
+        \toprule
+        设置 & 0 - 10 & 11 - 20 & 全部 \\
+        \midrule
+        本文方法 & \textbf{75.02} & \textbf{41.20} & \textbf{58.91} \\
+        无随机层 (w/o RHL) & 63.91 & 9.36 &  37.94 \\
+        无伪标签 (w/o Pseudo-Labeling) & 71.83 & 36.19 & 54.86 \\
+        \bottomrule
+    \end{tabular}
+    \label{tab:ablation}
+\end{table}
+
+如表~\ref{tab:ablation} 所示，旨在进一步分析各模块的作用，本节在 Pascal VOC2012 的 overlapped 10-1 设置下做了消融实验。完整模型的旧类别、新类别和总体 mIoU 分别为 75.02\%、41.20\% 与 58.91\%。
+
+去掉随机初始化隐藏层之后，模型的总体 mIoU 跌至 37.94\%，其中新类别 mIoU 仅为 9.36\%。这一结果表明：若只冻结编码器并直接接一个线性分类头，模型在学习新类别时缺乏足够的可塑性，高维随机映射对加强线性可分性具有决定性的作用。
+
+去掉伪标签机制之后，模型的总体 mIoU 跌至 54.86\%，旧类别和新类别的结果都有明显下滑。这一现象映射：即便选用闭式解更新来规避梯度遗忘，一旦训练标签本身被背景语义污染，模型也会因为监督信号偏移而浮现性能退化。基于此伪标签机制是处置语义漂移问题的必不可少一环。
+
+\subsection{效率分析}
+
+\begin{table}[!htbp]
+\caption{训练时间与 GPU 显存消耗对比，Naive 方法在 Pascal VOC2012 数据集上训练 10 个 epoch。}
+\centering
+\begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}lcccc}
+\toprule
+\textbf{方法}     & \textbf{单轮训练时间} & \textbf{总训练时间} & \textbf{GPU 显存} & \textbf{批量大小} \\
+\midrule
+Naive              & 64.39 s                  & 651.46 s        & 59.55 GB          & 32                  \\
+本文方法 (Ours) & 43.25 s                  & 43.25 s         & 51.61 GB          & 64                  \\
+\bottomrule
+\end{tabular*}
+\label{tab:performance_comparison}
+\end{table}
+
+如表~\ref{tab:performance_comparison} 所示，与 Naive 方法相比，本文方法在增量阶段只需要做一次前向特征提取和一次闭式解更新，故而具备明显的效率优势。实验结果呈现：在 Pascal VOC2012 数据集上， Naive 方法做 10 个 epoch 训练总耗时为 651.46 秒，而本文方法只需要单个 epoch、总耗时 43.25 秒，达成约 15 倍的加速。同时，本文方法还支持更大的批量大小，并且压低了显存占用。
+
+这说明两个方面的问题：其一，闭式解法对持续学习中遗忘有抑制作用；其二，在工程上它也更有效率。从应用角度来说，在需要不断接收新类别的同时又要让模型迅速进行更新的情况下（如边缘视觉设备、在线场景解析或者机器人感知等），这种方法一次性持续学习是有很大实用性的。
+
+\section{多模态大语言模型专家路由实验}
+
+\subsection{数据集与设置}
+
+本节取用多领域多模态持续学习基准 MLLM-CL~\citep{zhao2025mllm} 来做实验分析，任务覆盖遥感、医疗、自动驾驶、科学以及金融这五个领域，按领域顺序到达以模拟终身学习数据流。五个领域分别是：遥感（Remote Sensing, RS）、医疗（Medical, Med）、自动驾驶（Autonomous Driving, AD）、科学（Science, Sci）与金融（Finance, Fin），后文表格的列名按此缩写顺序排列。在完成层面，主干分别运用 LLaVA-1.5~\citep{liu2023llava} 与 InternVL-Chat~\citep{chen2024internvl} 这两种多模态大语言模型，主干参数全程保留冻结；每个领域任务对应一个 LoRA 专家来生成响应，路由头则借助第三章的递归岭回归闭式解，在领域顺序到达的过程中做增量更新。
+
+\subsection{评价指标与对比方法}
+
+评价指标选用第 2 章 2.6节 定义的多模态大语言模型持续学习专用指标：末轮全任务平均性能（MFT，式(\ref{eq:metric_mllm})）、末轮新任务平均性能（MFN，式(\ref{eq:metric_mllm})）、平均累积准确率（MAA，式(\ref{eq:metric_mllm})）以及后向迁移（BWT，式(\ref{eq:metric_bwt})）。MFT 和 MFN 分别代表整个过程最后的整体效果以及对于新任务的学习速度；而 MAA 是对每个时期的效果求均值得到的一个长期效果；BWT 是衡量了一个模型学习完所有的任务之后对于之前任务的记忆程度，在这个值越接近 0 的情况下说明这个系统的遗忘程度就越小。
+
+对比方法涵盖多模态大语言模型领域终身学习的代表性工作，包括：基于低秩适配的微调方法 LoRA-FT~\citep{hu2021lora}、面向正交子空间扩展的 O-LoRA~\citep{wang2023orthogonal}、基于 LoRA 专家混合的 MoELoRA~\citep{chen2024coin} 与 CL-MoE~\citep{huai2025cl}、基于层次提示与门控的 HiDe~\citep{guo2025hide}，以及近期的 SEFE~\citep{chen2025sefe} 与 DISCO~\citep{guo2025federated}。每种方法分别给出无回放与使用回放数据（以 $^{*}$ 标注）这两个版本，以映射其对历史样本的依赖程度。除此之外，本节还把 Zero-shot 作为不更新主干的下界参考，把专家完美选择条件下的结果作为理想上界 Oracle，便于直观比较解析路由相对于梯度路由在稳定性上的差距。基线结果引自~\citep{zhao2025mllm}。
+
+\subsection{主要结果分析}
+
+\begin{table*}[!htbp]
+\centering
+\setlength{\tabcolsep}{5pt}
+\caption{基于 LLaVA-1.5 的 MLLM-CL 基准领域持续学习结果。基线结果引自 \citep{zhao2025mllm}。$^{*}$ 表示使用回放数据的原始方法。}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{lccccccccc}
+\toprule
+& \multicolumn{5}{c}{任务性能} & \multicolumn{4}{c}{综合指标} \\
+\cmidrule(lr){2-6} \cmidrule(lr){7-10}
+方法 & RS    & Med   & AD    & Sci   & Fin   & MFT$\uparrow$ & MFN$\uparrow$ & MAA$\uparrow$ & BWT$\uparrow$ \\
+\midrule
+Zero-shot                                     & 32.29 & 28.28 & 15.59 & 35.55 & 62.56 & 34.85 & -     & -     & -      \\
+Oracle                                       & 81.06 & 65.83 & 54.17 & 56.86 & 91.14 & 69.81 & -     & -     & -      \\
+\midrule
+LoRA-FT~\citep{hu2021lora} & 69.65 & 41.59 & 25.43 & 40.88 & 87.45 & 64.98 & 53.00 & 61.13 & -14.97 \\
+LoRA-FT$^*$~\citep{hu2021lora} & 76.54 & 50.27 & 43.01 & 43.32 & 89.85 & 66.32 & 60.60 & 64.72 & -7.15 \\
+O-LoRA~\citep{wang2023orthogonal} & 74.64 & 44.42 & 30.02 & 41.47 & 87.15 & 65.16 & 55.54 & 62.12 & -12.03 \\
+O-LoRA$^*$~\citep{wang2023orthogonal} & 76.94 & 41.17 & 34.18 & 39.61 & 83.22 & 60.49 & 55.02 & 60.73 & -6.83 \\
+MoELoRA~\citep{chen2024coin} & 77.54 & 41.85 & 27.62 & 40.13 & 86.75 & 64.94 & 54.78 & 61.76 & -12.70 \\
+MoELoRA$^*$~\citep{chen2024coin} & 77.63 & 49.54 & 39.08 & 41.04 & 89.21 & 66.24 & 59.30 & 64.81 & -8.68 \\
+CL-MoE~\citep{huai2025cl} & 71.34 & 46.84 & 26.33 & 41.17 & 88.74 & 66.06 & 54.88 & 61.79 & -13.96 \\
+CL-MoE$^*$~\citep{huai2025cl} & 76.58 & 52.31 & 39.65 & 45.64 & 90.21 & 66.65 & 60.88 & 64.95 & -7.22 \\
+HiDe~\citep{guo2025hide} & 74.31 & 48.95 & 33.21 & 38.54 & 81.55 & 60.77 & 55.31 & 60.68 & -6.82 \\
+HiDe$^*$~\citep{guo2025hide} & 74.80 & 42.29 & 34.03 & 38.01 & 79.22 & 60.83 & 53.67 & 61.81 & -8.95 \\
+SEFE~\citep{chen2025sefe} & 77.26 & 50.37 & 37.21 & 40.87 & 86.82 & 65.01 & 58.51 & 63.63 & -8.13 \\
+SEFE$^*$~\citep{chen2025sefe} & 78.43 & 52.85 & 46.21 & 47.76 & 89.33 & 66.89 & 62.92 & 66.51 & -4.97 \\
+DISCO~\citep{guo2025federated} & 76.03 & 45.20 & 43.79 & 42.33 & 88.95 & 64.43 & 59.26 & 63.35 & -6.46 \\
+DISCO$^*$~\citep{guo2025federated} & 77.78 & 46.25 & 50.45 & 49.51 & 89.71 & 65.27 & 62.74 & 64.92 & -3.17 \\
+\midrule
+\rowcolor{Light}本文方法 & \textbf{81.28} & \textbf{65.61} & \textbf{54.68} & \textbf{56.89} & \textbf{91.14} & \textbf{69.92} & \textbf{69.92} & \textbf{71.29} & \textbf{0.00} \\
+\bottomrule
+\end{tabular}
+\label{tab:llavaDCL}
+\end{table*}
+
+\begin{table*}[!htbp]
+    \centering
+    \setlength{\tabcolsep}{5pt}
+    \caption{基于 InternVL-Chat-V1.0 的 MLLM-CL 基准领域持续学习结果。基线结果引自 \citep{zhao2025mllm}。$^*$ 表示使用回放数据的原始方法。}
+    \renewcommand{\arraystretch}{1.1}
+\begin{tabular}{lccccccccc}
+\toprule
+& \multicolumn{5}{c}{任务性能} & \multicolumn{4}{c}{综合指标} \\
+\cmidrule(lr){2-6} \cmidrule(lr){7-10}
+方法     & RS      & Med      & AD     & Sci       & Fin      & MFT$\uparrow$ & MFN$\uparrow$ & MAA$\uparrow$ & BWT$\uparrow$ \\
+\midrule
+Zero-shot                            & 31.16 & 29.81 & 14.06 & 33.93 & 64.32 & 34.66 & -     & -     & -      \\
+Oracle                              & 81.49 & 66.42 & 54.56 & 54.48 & 91.24 & {69.64} & -     & -     & -      \\
+\midrule
+LoRA-FT~\citep{hu2021lora} & 69.93 & 52.17 & 33.04 & 42.67 & 91.07 & 69.06 & 57.78 & 65.22 & -14.11 \\
+LoRA-FT$^*$~\citep{hu2021lora} & 77.06 & 47.55 & 42.67 & 43.31 & \textbf{91.44} & \textbf{69.43} & 60.41 & 67.45 & -11.28 \\
+MoELoRA~\citep{chen2024coin} & 69.90 & 52.08 & 33.17 & 42.19 & 90.58 & 68.83 & 57.58 & 65.97 & -14.06 \\
+MoELoRA$^*$~\citep{chen2024coin} & 76.74 & 52.65 & 38.81 & 42.15 & 89.84 & 67.90 & 60.04 & 66.01 & -9.83 \\
+HiDe~\citep{guo2025hide} & 75.40 & 57.66 & 36.73 & 41.48 & 88.59 & 65.26 & 59.97 & 65.94 & -6.60 \\
+HiDe$^*$~\citep{guo2025hide} & 53.17 & 52.61 & 40.85 & 47.04 & 89.17 & 64.20 & 56.57 & 61.06 & -9.54 \\
+DISCO~\citep{guo2025federated} & 75.12 & 50.69 & 52.41 & 50.67 & 90.86 & 68.85 & 63.95 & 68.14 & -6.12 \\
+DISCO$^*$~\citep{guo2025federated} & 77.90 & 47.50 & 49.13 & 49.37 & 90.92 & 68.55 & 62.96 & 67.81 & -6.98 \\
+\midrule
+\rowcolor{Light}本文方法 & \textbf{81.52} & \textbf{64.42} & \textbf{54.62} & \textbf{53.12} & 91.10 & 68.96 & \textbf{68.96} & \textbf{70.74} & \textbf{0.00} \\
+\bottomrule
+\end{tabular}
+\label{tab:internvlDCL}
+\end{table*}
+
+\begin{table}[!htbp]
+\centering
+\caption{LLaVA-1.5-7B 上的 CF-Router 在终身学习最后阶段的性能。结果报告为 120 次任务排列的均值 $\pm$ 标准差。表中 5 个领域专家准确率列的标准差恒为 0.0000，是因为每个 LoRA 专家在其单一领域上独立训练，专家本身性能不随任务到达顺序变化；标准差仅反映路由阶段对不同到达顺序的差异。}
+\label{tab:llava_router}
+\begin{tabular}{lcc}
+\toprule
+领域 & 路由准确率 & 专家准确率 \\
+\midrule
+RS      & $1.0000 \pm .0000$ & $0.8128 \pm .0000$ \\
+Med     & $1.0000 \pm .0000$ & $0.6561 \pm .0000$ \\
+AD      & $1.0000 \pm .0000$ & $0.5468 \pm .0000$ \\
+Sci     & $0.9993 \pm .0000$ & $0.5689 \pm .0000$ \\
+Fin     & $1.0000 \pm .0000$ & $0.9114 \pm .0000$ \\
+\midrule
+平均 & $0.9999 \pm .0000$ & $0.6992 \pm .0000$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\caption{InternVL-Chat-V1.0 上的 CF-Router 在终身学习最后阶段的性能。结果报告为 120 次任务排列的均值 $\pm$ 标准差。表中 5 个领域专家准确率列的标准差恒为 0.0000，是因为每个 LoRA 专家在其单一领域上独立训练，专家本身性能不随任务到达顺序变化；标准差仅反映路由阶段对不同到达顺序的差异。}
+\label{tab:internvl_router}
+\begin{tabular}{lcc}
+\toprule
+领域 & 路由准确率 & 专家准确率 \\
+\midrule
+RS      & $1.0000 \pm .0000$ & $0.8152 \pm .0000$ \\
+Med     & $1.0000 \pm .0000$ & $0.6442 \pm .0000$ \\
+AD      & $1.0000 \pm .0000$ & $0.5462 \pm .0000$ \\
+Sci     & $0.9999 \pm .0000$ & $0.5312 \pm .0000$ \\
+Fin     & $1.0000 \pm .0000$ & $0.9110 \pm .0000$ \\
+\midrule
+平均 & $1.0000 \pm .0000$ & $0.6896 \pm .0000$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+如表~\ref{tab:llavaDCL}、表~\ref{tab:internvlDCL}、表~\ref{tab:llava_router} 与表~\ref{tab:internvl_router} 所示，本文的解析路由方法在两种主干模型上都呈现出有竞争力的综合表现。以 LLaVA-1.5 为例，该方法在 MFT、MFN、MAA、BWT 这四项综合指标上都位居榜首，平均累积准确率（MAA）达到 71.29\%，明显高于多种已有基线；更关键的是，其后向迁移（BWT）等于 0.00，表明在整个持续学习过程中几乎没有发生遗忘。在 InternVL-Chat 主干上，本文方法的 MFT 为 68.96\%，略低于使用回放数据的 LoRA-FT$^*$（69.43\%），但在 MFN（68.96\%）、MAA（70.74\%）以及 BWT（0.00）这三项指标上依旧大幅领先所有对比基线，并保留 0.00 的后向迁移；这一现象指向：解析路由相对梯度路由在稳定性与无遗忘性上具有综合优势——即便单点性能稍有波动，长期累积和遗忘控制能力依旧占优。
+
+这说明两点：第一，专家隔离可以降低任务间参数间的相互影响，而解析路由可以保证正确专家被准确选择；第二，封闭形式求解可以避免训练路由过程中出现的记忆问题，在总体上获得更好的表现。
+
+进一步看，该解析路由方法在路由准确率上几乎达到了满分。不同领域任务在最后阶段的路由准确率基本都保留在 0.999 以上，这表明多模态大语言模型的隐藏状态中已经蕴含了足够强的领域判别信息，解析路由头能够把这些信息高效地映射为专家选择结果。
+
+\subsection{方法优势与讨论}
+
+与传统的梯度式路由器相比，本文的解析路由方法主要具备如下几方面优势。
+
+一是无遗忘。由于每个任务专家彼此隔离，路由头又依托解析方式直接由统计量解出，由此新任务并不会凭借梯度更新去破坏旧任务的路由边界。
+
+二是无回放。系统只需要保存第三章定义的逆自相关矩阵 $\Psi_t$ 和当前路由头 $\widehat{\Phi}_t$，或者说保存 $\mathbf{G}$ 和 $\mathbf{Q}$ 即可，不需要保存之前所有图像、文本或多模态数据，因此对于非常注重隐私或者存储受限的应用较为适用。
+
+三是高效率。路由头的更新只涉及矩阵乘法和矩阵求逆，复杂度远远低于对整个路由网络做多轮梯度训练。对于多模态大语言模型这类参数规模极大的系统而言，这种优势就显得尤为突出。
+
+四是顺序无关性。无论写成第三章中的递归形式，还是写成 $\mathbf{G}$ 与 $\mathbf{Q}$ 的统计量累积形式，其核心更新都是基于二阶统计量与互相关统计量的累加。所以在理想数值条件、固定类别索引映射的前提下，任务顺序并不会改变最终的解析解（这一点已由第三章定理~\ref{thm:closed_form_recursive} 有关递归更新与联合训练严格等价的结论直接保障）。这是传统梯度式方法所难以拥有的性质，也为持续学习系统的稳定部署带来了便利。
+
+\section{本章小结}
+
+本章在统一实验体系下，对第四章针对四类典型任务给出的闭式解持续学习应用方法做了较为全面的评估。在医学图像疾病分类任务里，所提方法在 BloodMNIST、PathMNIST 与 OrganAMNIST 这三个数据集上都取得了明显高于多类传统持续学习基线的平均准确率以及更低的遗忘率，把解析方法在隐私敏感场景中的实际价值落实了下来。在时间序列分类任务上，所提方法在 UCI-HAR、UWave、DSA、GRABMyo 与 WISDM 五个数据集上同时拿到了高准确率与低遗忘率，消融实验也确认了多尺度特征融合和随机高维映射的关键作用，效率分析则呈现该方法在五个数据集上都具备最快的运行速度。在语义分割任务里，所提方法在 Pascal VOC2012、S3DIS 与 ScanNet 上均大幅优于现有代表性方法，消融实验印证了随机高维映射与伪标签机制的必要性，效率分析则呈现非常大的加速。在多模态大语言模型专家路由任务里，所提方法在 LLaVA-1.5 与 InternVL-Chat 两种基座模型上都接近无遗忘的水平，并在路由准确率上几乎达到满分。综合上述结果，第五章实验从多任务、多模态以及多评测维度证明了第三章统一闭式解理论与第四章针对四类典型任务给出的应用方法在准确率、遗忘率与训练效率上的综合优势。
