@@ -50,7 +50,8 @@
 % 设置页眉和页脚 %
 \pagestyle{fancy}
 % 本科学位论文底部样式
-\newcommand{\csu@thepage@format@zh}[2]{第~{#1}~页~共~{#2}~页}
+% 页脚"第 X 页 共 Y 页"——字间距用 \hspace{0.7em} 对齐 Word/余海(实测约0.72字宽)
+\newcommand{\csu@thepage@format@zh}[2]{第\hspace{0.7em}{#1}\hspace{0.7em}页\hspace{0.7em}共\hspace{0.7em}{#2}\hspace{0.7em}页}
 \newcommand{\csu@thepage@format@en}[1]{#1}
 % 空白页清空页眉页脚
 \patchcmd{\cleardoublepage}{\newpage}{\thispagestyle{empty}\newpage}{}{}

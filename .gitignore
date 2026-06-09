@@ -263,8 +263,11 @@ images/
 *.doc
 *.docx
 word/
-out/
+out/*
 *-SAVE-ERROR
 .vscode/
 .github/
+
+# 例外：最终论文 PDF 纳入版本库（out/ 其它内容仍忽略）
+!out/csuthesis_main.pdf
 
