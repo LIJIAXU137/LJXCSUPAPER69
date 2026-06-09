@@ -139,6 +139,7 @@
 % % 重定义ctex定义好的宋体和黑体，以支持伪加粗AutoFakeBold
 % % 即支持类似word里的给黑体、宋体等中文字体加粗的操作，用\bfseries
 \newfontfamily{\enheiti}{SimHei} % 解决标题英文括号不显示黑体
+\newfontfamily{\enkaiti}{KaiTi}  % 楷体标题里的数字也用楷体(否则落到 Times)
 
 % 预定义名称
 \newcommand*{\csu@name@cover}{扉页}
@@ -620,7 +621,8 @@
 % 各级标题格式设置。
 \ctexset{%
     chapter = {%
-        format       = \zihao{3} \heiti\centering,
+        % \enheiti 让标题里的数字(如"第1章"的1)也用黑体SimHei，否则数字会落到拉丁主字体(Times)
+        format       = \zihao{3} \heiti\enheiti\centering,
         name         = {第, 章},
         nameformat   = {},
         number       = \arabic{chapter},
@@ -637,7 +639,7 @@
         % afterskip    = {\ifcsu@type@graduate 30pt\else 20pt\fi},
     },
     section = {%
-        format       = \zihao{-4} \heiti,
+        format       = \zihao{-4} \heiti\enheiti,
         afterindent  = true,
         % beforeskip 默认为 3.5ex plus 1ex minus .2ex 适当缩减
         % beforeskip   = {20pt},
@@ -646,7 +648,7 @@
         fixskip      = true,
     },
     subsection = {%
-        format       = \zihao{-4} \kaiti,
+        format       = \zihao{-4} \kaiti\enkaiti,
         afterindent  = true,
         afterskip    = {2ex \@plus .2ex},
         fixskip      = true,
